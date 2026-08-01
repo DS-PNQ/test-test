@@ -1,0 +1,282 @@
+[
+  {
+    "id": "ps-001",
+    "en": "I would like to renew my citizen ID card before it expires.",
+    "vi": "Tôi muốn gia hạn căn cước công dân trước khi hết hạn.",
+    "zh_hans": "我想在身份证到期前办理续期。",
+    "zh_hant": "我想在身分證到期前辦理續期。"
+  },
+  {
+    "id": "ps-002",
+    "en": "Please bring both the original and a copy of your birth certificate.",
+    "vi": "Vui lòng mang theo bản gốc và bản sao của giấy khai sinh.",
+    "zh_hans": "请携带出生证明原件和复印件。",
+    "zh_hant": "請攜帶出生證明正本和影本。"
+  },
+  {
+    "id": "ps-003",
+    "en": "I need to register my permanent residence at my new address.",
+    "vi": "Tôi cần đăng ký thường trú tại địa chỉ mới.",
+    "zh_hans": "我需要在新地址办理户籍登记。",
+    "zh_hant": "我需要在新地址辦理戶籍登記。"
+  },
+  {
+    "id": "ps-004",
+    "en": "Your application is being processed and the result will be available within three business days.",
+    "vi": "Hồ sơ của bạn đang được xử lý và sẽ có kết quả trong ba ngày làm việc.",
+    "zh_hans": "您的申请正在处理中，三个工作日内会有结果。",
+    "zh_hant": "您的申請正在處理中，三個工作天內會有結果。"
+  },
+  {
+    "id": "ps-005",
+    "en": "You can submit your application online through the public service portal.",
+    "vi": "Bạn có thể nộp hồ sơ trực tuyến thông qua cổng dịch vụ công.",
+    "zh_hans": "您可以通过政务服务平台在线提交申请。",
+    "zh_hant": "您可以透過政府服務平台線上提交申請。"
+  },
+  {
+    "id": "ps-006",
+    "en": "The fee for reissuing a driver's license can be paid by bank transfer.",
+    "vi": "Lệ phí cấp lại giấy phép lái xe có thể được thanh toán bằng chuyển khoản.",
+    "zh_hans": "补办驾驶证的费用可以通过银行转账支付。",
+    "zh_hant": "補辦駕駛執照的費用可以透過銀行轉帳支付。"
+  },
+  {
+    "id": "ps-007",
+    "en": "Please take a queue number and wait until your turn.",
+    "vi": "Vui lòng lấy số thứ tự và chờ đến lượt được phục vụ.",
+    "zh_hans": "请先取号并等待叫号。",
+    "zh_hant": "請先取號並等待叫號。"
+  },
+  {
+    "id": "ps-008",
+    "en": "Your personal information will be protected in accordance with the law.",
+    "vi": "Thông tin cá nhân của bạn sẽ được bảo mật theo quy định của pháp luật.",
+    "zh_hans": "您的个人信息将依法受到保护。",
+    "zh_hant": "您的個人資訊將依法受到保護。"
+  },
+  {
+    "id": "ps-009",
+    "en": "If you find any errors, please contact the office that received your application.",
+    "vi": "Nếu phát hiện sai sót, vui lòng liên hệ cơ quan tiếp nhận hồ sơ.",
+    "zh_hans": "如发现错误，请联系受理单位。",
+    "zh_hant": "如發現錯誤，請聯絡受理單位。"
+  },
+  {
+    "id": "ps-010",
+    "en": "You need to present your citizen ID card for identity verification.",
+    "vi": "Bạn cần xuất trình căn cước công dân để xác minh danh tính.",
+    "zh_hans": "您需要出示身份证以进行身份验证。",
+    "zh_hant": "您需要出示身分證以進行身分驗證。"
+  },
+  {
+    "id": "ps-011",
+    "en": "Your test results will be delivered through the electronic health application.",
+    "vi": "Kết quả xét nghiệm sẽ được trả qua ứng dụng y tế điện tử.",
+    "zh_hans": "检测结果将通过电子医疗应用发送。",
+    "zh_hant": "檢測結果將透過電子醫療應用程式發送。"
+  },
+  {
+    "id": "ps-012",
+    "en": "Students can register for school admission online from August 1 to August 15.",
+    "vi": "Học sinh có thể đăng ký tuyển sinh trực tuyến từ ngày 1 đến ngày 15 tháng 8.",
+    "zh_hans": "学生可于8月1日至8月15日在线报名入学。",
+    "zh_hant": "學生可於8月1日至8月15日線上報名入學。"
+  },
+  {
+    "id": "ps-013",
+    "en": "Taxpayers must complete the tax declaration before the deadline.",
+    "vi": "Người nộp thuế cần hoàn thành tờ khai trước thời hạn quy định.",
+    "zh_hans": "纳税人必须在规定期限前完成报税。",
+    "zh_hant": "納稅人必須在規定期限前完成報稅。"
+  },
+  {
+    "id": "ps-014",
+    "en": "Please carefully verify the account number before paying the electricity bill.",
+    "vi": "Vui lòng kiểm tra kỹ số tài khoản trước khi thanh toán hóa đơn điện.",
+    "zh_hans": "缴纳电费前请仔细核对账号。",
+    "zh_hant": "繳納電費前請仔細核對帳號。"
+  },
+  {
+    "id": "ps-015",
+    "en": "The application will be rejected if required documents are missing.",
+    "vi": "Đơn đăng ký sẽ bị từ chối nếu thiếu giấy tờ bắt buộc.",
+    "zh_hans": "如果缺少必要文件，申请将被拒绝。",
+    "zh_hant": "如果缺少必要文件，申請將被拒絕。"
+  },
+  {
+    "id": "ps-016",
+    "en": "Citizens can check the application status using the receipt number.",
+    "vi": "Người dân có thể tra cứu tình trạng hồ sơ bằng mã số tiếp nhận.",
+    "zh_hans": "居民可以使用受理编号查询申请进度。",
+    "zh_hant": "民眾可以使用受理編號查詢申請進度。"
+  },
+  {
+    "id": "ps-017",
+    "en": "If you forget your password, you can reset it using a verification code sent to your phone.",
+    "vi": "Nếu quên mật khẩu, bạn có thể đặt lại bằng mã xác thực gửi qua điện thoại.",
+    "zh_hans": "如果忘记密码，可以使用发送到手机的验证码重置。",
+    "zh_hant": "如果忘記密碼，可以使用傳送到手機的驗證碼重設。"
+  },
+  {
+    "id": "ps-018",
+    "en": "Your appointment with the administrative office is confirmed for 9:00 a.m. on Monday.",
+    "vi": "Cuộc hẹn của bạn với cơ quan hành chính được xác nhận vào lúc 9 giờ sáng thứ Hai.",
+    "zh_hans": "您与行政机关的预约已确认在周一上午九点。",
+    "zh_hant": "您與行政機關的預約已確認於週一上午九點。"
+  },
+  {
+    "id": "ps-019",
+    "en": "The electronic receipt has the same legal validity as the paper receipt.",
+    "vi": "Biên lai điện tử có giá trị pháp lý tương đương biên lai giấy.",
+    "zh_hans": "电子收据与纸质收据具有同等法律效力。",
+    "zh_hant": "電子收據與紙本收據具有同等法律效力。"
+  },
+  {
+    "id": "ps-020",
+    "en": "After your application is approved, you will receive a notification by email and text message.",
+    "vi": "Sau khi hồ sơ được phê duyệt, bạn sẽ nhận được thông báo qua email và tin nhắn.",
+    "zh_hans": "申请获批后，您将收到电子邮件和短信通知。",
+    "zh_hant": "申請核准後，您將收到電子郵件和簡訊通知。"
+  },
+  {
+    "id": "ps-021",
+    "en": "I would like to extend my visa before it expires.",
+    "vi": "Tôi muốn gia hạn thị thực của mình trước khi hết hạn.",
+    "zh_hans": "我想在签证到期前办理延期。",
+    "zh_hant": "我想在簽證到期前辦理延期。"
+  },
+  {
+    "id": "ps-022",
+    "en": "I need to register my temporary residence at my current address.",
+    "vi": "Tôi cần đăng ký tạm trú tại địa chỉ nơi tôi đang ở.",
+    "zh_hans": "我需要登记目前居住地址的临时居住信息。",
+    "zh_hant": "我需要登記目前居住地址的臨時居住資訊。"
+  },
+  {
+    "id": "ps-023",
+    "en": "Please present your passport at the service counter.",
+    "vi": "Xin vui lòng xuất trình hộ chiếu tại quầy làm thủ tục.",
+    "zh_hans": "请在服务柜台出示护照。",
+    "zh_hant": "請在服務櫃檯出示護照。"
+  },
+  {
+    "id": "ps-024",
+    "en": "You may fill out the form in either English or Vietnamese.",
+    "vi": "Bạn có thể điền mẫu đơn bằng tiếng Anh hoặc tiếng Việt.",
+    "zh_hans": "您可以使用英语或越南语填写表格。",
+    "zh_hant": "您可以使用英語或越南語填寫表格。"
+  },
+  {
+    "id": "ps-025",
+    "en": "If you need interpretation assistance, please inform the staff.",
+    "vi": "Nếu cần hỗ trợ phiên dịch, vui lòng thông báo cho nhân viên.",
+    "zh_hans": "如果需要口译协助，请告知工作人员。",
+    "zh_hant": "如果需要口譯協助，請告知工作人員。"
+  },
+  {
+    "id": "ps-026",
+    "en": "Please take a queue number and wait until your turn.",
+    "vi": "Vui lòng lấy số thứ tự và chờ đến lượt được phục vụ.",
+    "zh_hans": "请先取号并等待叫号。",
+    "zh_hant": "請先取號並等待叫號。"
+  },
+  {
+    "id": "ps-027",
+    "en": "Your application is under review.",
+    "vi": "Đơn đăng ký của bạn đang được xem xét.",
+    "zh_hans": "您的申请正在审核中。",
+    "zh_hant": "您的申請正在審核中。"
+  },
+  {
+    "id": "ps-028",
+    "en": "The result will be sent by email within three business days.",
+    "vi": "Kết quả sẽ được gửi qua email trong vòng ba ngày làm việc.",
+    "zh_hans": "结果将在三个工作日内通过电子邮件发送。",
+    "zh_hant": "結果將於三個工作天內透過電子郵件寄送。"
+  },
+  {
+    "id": "ps-029",
+    "en": "You must pay the processing fee before submitting the application.",
+    "vi": "Bạn cần thanh toán lệ phí trước khi nộp hồ sơ.",
+    "zh_hans": "提交申请前需要缴纳办理费用。",
+    "zh_hant": "提交申請前需要繳納辦理費用。"
+  },
+  {
+    "id": "ps-030",
+    "en": "You can pay by cash or bank card.",
+    "vi": "Bạn có thể thanh toán bằng tiền mặt hoặc thẻ ngân hàng.",
+    "zh_hans": "您可以使用现金或银行卡付款。",
+    "zh_hant": "您可以使用現金或銀行卡付款。"
+  },
+  {
+    "id": "ps-031",
+    "en": "Some documents must be translated into Vietnamese and notarized.",
+    "vi": "Một số giấy tờ cần được dịch sang tiếng Việt và công chứng.",
+    "zh_hans": "部分文件需要翻译成越南语并办理公证。",
+    "zh_hant": "部分文件需要翻譯成越南語並辦理公證。"
+  },
+  {
+    "id": "ps-032",
+    "en": "Please verify your full name and passport number before confirming.",
+    "vi": "Vui lòng kiểm tra kỹ họ tên và số hộ chiếu trước khi xác nhận.",
+    "zh_hans": "确认前请仔细核对姓名和护照号码。",
+    "zh_hant": "確認前請仔細核對姓名和護照號碼。"
+  },
+  {
+    "id": "ps-033",
+    "en": "If any documents are missing, we will notify you.",
+    "vi": "Nếu hồ sơ còn thiếu giấy tờ, chúng tôi sẽ thông báo cho bạn.",
+    "zh_hans": "如果申请材料不完整，我们会通知您。",
+    "zh_hant": "如果申請資料不完整，我們會通知您。"
+  },
+  {
+    "id": "ps-034",
+    "en": "Would you like to receive notifications by email or text message?",
+    "vi": "Bạn có muốn nhận thông báo bằng email hay tin nhắn điện thoại?",
+    "zh_hans": "您希望通过电子邮件还是短信接收通知？",
+    "zh_hant": "您希望透過電子郵件還是簡訊接收通知？"
+  },
+  {
+    "id": "ps-035",
+    "en": "Please sign in the marked box.",
+    "vi": "Xin vui lòng ký tên vào ô được đánh dấu.",
+    "zh_hans": "请在标记的位置签名。",
+    "zh_hant": "請在標記的位置簽名。"
+  },
+  {
+    "id": "ps-036",
+    "en": "You can book an appointment online before visiting the office.",
+    "vi": "Bạn có thể đặt lịch hẹn trực tuyến trước khi đến văn phòng.",
+    "zh_hans": "您可以在前往办事处前在线预约。",
+    "zh_hant": "您可以在前往辦事處前線上預約。"
+  },
+  {
+    "id": "ps-037",
+    "en": "The office is open Monday through Friday from 8:00 a.m. to 5:00 p.m.",
+    "vi": "Văn phòng mở cửa từ thứ Hai đến thứ Sáu, từ 8 giờ sáng đến 5 giờ chiều.",
+    "zh_hans": "办事处开放时间为周一至周五上午八点到下午五点。",
+    "zh_hant": "辦事處開放時間為週一至週五上午八點到下午五點。"
+  },
+  {
+    "id": "ps-038",
+    "en": "Please keep your receipt until the procedure is completed.",
+    "vi": "Vui lòng giữ lại biên lai cho đến khi thủ tục hoàn tất.",
+    "zh_hans": "请保留收据直到手续完成。",
+    "zh_hant": "請保留收據直到手續完成。"
+  },
+  {
+    "id": "ps-039",
+    "en": "If you have any questions, please contact our support hotline.",
+    "vi": "Nếu bạn có câu hỏi, hãy liên hệ đường dây hỗ trợ của chúng tôi.",
+    "zh_hans": "如果您有任何问题，请联系我们的服务热线。",
+    "zh_hant": "如果您有任何問題，請聯絡我們的客服專線。"
+  },
+  {
+    "id": "ps-040",
+    "en": "Welcome to Vietnam. We hope your application process goes smoothly.",
+    "vi": "Chào mừng bạn đến Việt Nam. Chúng tôi hy vọng thủ tục của bạn diễn ra thuận lợi.",
+    "zh_hans": "欢迎来到越南。祝您办理手续顺利。",
+    "zh_hant": "歡迎來到越南。祝您辦理手續順利。"
+  }
+]

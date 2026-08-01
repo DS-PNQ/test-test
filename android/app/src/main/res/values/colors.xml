@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark theme colors -->
+    <color name="background_dark">#FF121212</color>
+    <color name="surface_dark">#FF1E1E1E</color>
+    <color name="surface_elevated">#FF2A2A2A</color>
+    <color name="accent">#FF6C63FF</color>
+    <color name="accent_light">#FF9B94FF</color>
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#FFBDBDBD</color>
+    <color name="text_hint">#FF757575</color>
+    <color name="error">#FFCF6679</color>
+    <color name="success">#FF81C784</color>
+
+    <!-- Status bar -->
+    <color name="statusBarColor">#FF0A0A0A</color>
+</resources>

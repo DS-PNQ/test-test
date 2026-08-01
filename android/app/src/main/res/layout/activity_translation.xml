@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/background_dark">
+
+    <!-- Header with language selection -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:gravity="center_vertical"
+        android:background="@color/surface_dark">
+
+        <!-- Source language spinner -->
+        <Spinner
+            android:id="@+id/spinner_src_lang"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="@color/surface_elevated"
+            android:padding="8dp" />
+
+        <!-- Swap arrow -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="→"
+            android:textSize="24sp"
+            android:textColor="@color/accent"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp" />
+
+        <!-- Target language spinner -->
+        <Spinner
+            android:id="@+id/spinner_tgt_lang"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="@color/surface_elevated"
+            android:padding="8dp" />
+    </LinearLayout>
+
+    <!-- Transcript display (source language) -->
+    <androidx.cardview.widget.CardView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_margin="12dp"
+        app:cardBackgroundColor="@color/surface_dark"
+        app:cardCornerRadius="12dp"
+        app:cardElevation="4dp"
+        xmlns:app="http://schemas.android.com/apk/res-auto">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/label_transcript"
+                android:textSize="12sp"
+                android:textColor="@color/text_secondary"
+                android:textAllCaps="true"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:id="@+id/txt_transcript"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:textSize="18sp"
+                android:textColor="@color/text_primary"
+                android:hint="@string/hint_speak"
+                android:gravity="top" />
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
+
+    <!-- Translation display (target language) -->
+    <androidx.cardview.widget.CardView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="12dp"
+        app:cardBackgroundColor="@color/surface_elevated"
+        app:cardCornerRadius="12dp"
+        app:cardElevation="4dp"
+        xmlns:app="http://schemas.android.com/apk/res-auto">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/label_translation"
+                android:textSize="12sp"
+                android:textColor="@color/accent"
+                android:textAllCaps="true"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:id="@+id/txt_translation"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:textSize="20sp"
+                android:textColor="@color/text_primary"
+                android:textStyle="bold"
+                android:gravity="top" />
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
+
+    <!-- Timing info -->
+    <TextView
+        android:id="@+id/txt_timing"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="11sp"
+        android:textColor="@color/text_hint"
+        android:gravity="center"
+        android:paddingBottom="4dp" />
+
+    <!-- Push-to-talk button -->
+    <Button
+        android:id="@+id/btn_talk"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:layout_margin="16dp"
+        android:text="@string/btn_talk"
+        android:textSize="18sp"
+        android:textColor="@color/text_primary"
+        android:backgroundTint="@color/accent"
+        android:textAllCaps="false" />
+
+</LinearLayout>

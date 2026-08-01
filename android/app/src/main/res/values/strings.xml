@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OmniVoice</string>
+    <string name="app_subtitle">On-Device Speech Translation • VN↔EN • VN↔CN</string>
+
+    <!-- Loading screen -->
+    <string name="loading_models">Initializing translation models…</string>
+
+    <!-- Translation screen -->
+    <string name="label_transcript">Transcript</string>
+    <string name="label_translation">Translation</string>
+    <string name="hint_speak">Press and hold the button to speak…</string>
+    <string name="btn_talk">🎤  Hold to Speak</string>
+    <string name="btn_recording">🔴  Recording…</string>
+
+    <!-- Languages -->
+    <string name="lang_vi">Tiếng Việt</string>
+    <string name="lang_en">English</string>
+    <string name="lang_zh">中文 (简体)</string>
+
+    <!-- Errors -->
+    <string name="error_no_permission">Microphone permission required</string>
+    <string name="error_model_load">Failed to load translation models</string>
+</resources>
