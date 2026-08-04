@@ -9,6 +9,7 @@ package com.omnivoice.onspeak47.pipeline;
 
 import android.content.Context;
 import android.media.MediaPlayer;
+import android.os.Looper;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
@@ -33,7 +34,7 @@ public class TTSModule {
     private static final String TAG = "TTSModule";
 
     private TextToSpeech androidTTS;
-    private boolean ttsReady = false;
+    private volatile boolean ttsReady = false;
     private final Context context;
 
     // Language locale mapping
@@ -53,7 +54,7 @@ public class TTSModule {
         this.context = context;
         CountDownLatch latch = new CountDownLatch(1);
 
-        androidTTS = new TextToSpeech(context, status -> {
+        androidTTS = new TextToSpeech(context.getApplicationContext(), status -> {
             if (status == TextToSpeech.SUCCESS) {
                 ttsReady = true;
                 Log.i(TAG, "Android TTS initialized");
@@ -63,10 +64,12 @@ public class TTSModule {
             latch.countDown();
         });
 
-        try {
-            latch.await(10, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Log.e(TAG, "TTS init interrupted", e);
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            try {
+                latch.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Log.e(TAG, "TTS init interrupted", e);
+            }
         }
     }
 

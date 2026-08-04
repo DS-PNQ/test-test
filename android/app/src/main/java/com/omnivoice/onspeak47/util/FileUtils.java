@@ -24,22 +24,44 @@ public final class FileUtils {
     private FileUtils() {}
 
     /**
-     * Copy a file from the app's assets directory to internal storage.
+     * Copy a file from the app's assets directory to the specified directory.
+     * Also automatically copies a matching .onnx_data file if it exists.
      *
      * @param context   Application context
      * @param assetName Filename in the assets directory
-     * @return Path to the copied file in internal storage
+     * @param targetDir Target directory
+     * @return Path to the copied file
      */
-    public static String copyAssetToInternal(Context context, String assetName) {
-        File outFile = new File(context.getFilesDir(), assetName);
+    public static String copyAssetToDir(Context context, String assetName, File targetDir) {
+        copySingleAssetToDir(context, assetName, targetDir);
+
+        // If it's an ONNX file, check for external data (.onnx_data)
+        if (assetName.endsWith(".onnx")) {
+            String dataFile = assetName + "_data";
+            try {
+                // Check if the data file exists in assets
+                context.getAssets().open(dataFile).close();
+                copySingleAssetToDir(context, dataFile, targetDir);
+            } catch (IOException ignored) {
+                // .onnx_data doesn't exist for this model, which is fine
+            }
+        }
+
+        return new File(targetDir, assetName).getAbsolutePath();
+    }
+
+    private static void copySingleAssetToDir(Context context, String assetName, File targetDir) {
+        File outFile = new File(targetDir, assetName);
 
         if (outFile.exists()) {
             Log.d(TAG, "Asset already exists: " + outFile.getAbsolutePath());
-            return outFile.getAbsolutePath();
+            return;
         }
 
         // Ensure parent directories exist
-        outFile.getParentFile().mkdirs();
+        if (!targetDir.exists()) {
+            targetDir.mkdirs();
+        }
 
         try (InputStream in = context.getAssets().open(assetName);
              FileOutputStream out = new FileOutputStream(outFile)) {
@@ -61,8 +83,14 @@ public final class FileUtils {
             Log.e(TAG, "Failed to copy asset: " + assetName, e);
             if (outFile.exists()) outFile.delete();
         }
+    }
 
-        return outFile.getAbsolutePath();
+    /**
+     * Copy a file from the app's assets directory to internal storage.
+     * Deprecated: Use copyAssetToDir instead to avoid filling up internal storage.
+     */
+    public static String copyAssetToInternal(Context context, String assetName) {
+        return copyAssetToDir(context, assetName, context.getFilesDir());
     }
 
     /**

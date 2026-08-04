@@ -139,6 +139,15 @@ public class OmniVoiceApp extends Application {
         });
     }
 
+    /**
+     * Create orchestrator instance if modules are initialized.
+     */
+    public void createOrchestrator() {
+        if (asrModule != null && translationModule != null && ttsModule != null) {
+            orchestrator = new PipelineOrchestrator(asrModule, translationModule, ttsModule);
+        }
+    }
+
     // ----------------------------------------------------------------
     // Getters
     // ----------------------------------------------------------------

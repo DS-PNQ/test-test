@@ -129,7 +129,9 @@ public class AudioRecorder {
 
     private void writeAudioToFile() {
         File file = new File(outputPath);
-        file.getParentFile().mkdirs();
+        if (file.getParentFile() != null) {
+            file.getParentFile().mkdirs();
+        }
 
         try (FileOutputStream fos = new FileOutputStream(file)) {
             // Write WAV header placeholder (will be updated at the end)

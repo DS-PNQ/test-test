@@ -73,6 +73,7 @@ public final class TensorUtils {
      * Get the index of the largest value in an array.
      */
     public static int argmax(float[] values) {
+        if (values == null || values.length == 0) return 0;
         int maxIdx = 0;
         float maxVal = values[0];
         for (int i = 1; i < values.length; i++) {

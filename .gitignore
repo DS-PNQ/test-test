@@ -1,0 +1,28 @@
+# Models and large files
+onnx_models/
+*.onnx
+*.onnx_data
+*.model
+*.bin
+*.pt
+*.pth
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Android
+android/.gradle/
+android/app/build/
+android/.idea/
+*.keystore
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.bak
+.DS_Store

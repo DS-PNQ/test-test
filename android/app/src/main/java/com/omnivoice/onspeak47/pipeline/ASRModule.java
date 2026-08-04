@@ -9,6 +9,7 @@ import android.util.Log;
 
 import java.io.File;
 import java.nio.FloatBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -68,6 +69,11 @@ public class ASRModule {
         String decoderPath = copyModelToInternal(context, DECODER_FILE);
 
         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+        try {
+            options.registerCustomOpLibrary(ai.onnxruntime.extensions.OrtxPackage.getLibraryPath());
+        } catch (OrtException e) {
+            Log.e(TAG, "Extensions library not found", e);
+        }
         options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT);
 
         encoderSession = env.createSession(encoderPath, options);
@@ -87,6 +93,12 @@ public class ASRModule {
         long startTime = System.currentTimeMillis();
 
         try {
+            File audioFile = new File(audioPath);
+            if (!audioFile.exists() || audioFile.length() <= 44) {
+                Log.w(TAG, "Audio file is missing or empty: " + audioPath);
+                return new ASRResult("[No audio recorded]", language != null ? language : "auto", 0);
+            }
+
             // 1. Extract log-mel spectrogram features
             float[][] melFeatures = extractMelFeatures(audioPath);
 
@@ -95,6 +107,7 @@ public class ASRModule {
 
             // 3. Run decoder (autoregressive)
             String text = runDecoder(encoderOutput, language);
+            if (encoderOutput != null) encoderOutput.close();
 
             long elapsed = System.currentTimeMillis() - startTime;
             Log.i(TAG, "Transcription done in " + elapsed + "ms: " + text);
@@ -112,6 +125,7 @@ public class ASRModule {
     // ----------------------------------------------------------------
 
     private OnnxTensor runEncoder(float[][] melFeatures) throws OrtException {
+        if (encoderSession == null) return null;
         // Reshape to [1, n_mels, n_frames]
         long[] shape = new long[]{1, melFeatures.length, melFeatures[0].length};
         float[] flat = TensorUtils.flatten2D(melFeatures);
@@ -121,28 +135,56 @@ public class ASRModule {
         inputs.put("input_features", inputTensor);
 
         OrtSession.Result result = encoderSession.run(inputs);
+        inputTensor.close();
         return (OnnxTensor) result.get(0);
     }
 
     private String runDecoder(OnnxTensor encoderOutput, String language) throws OrtException {
-        // Build initial decoder input tokens: SOT, language, transcribe, no_timestamps
+        if (decoderSession == null || encoderOutput == null) return "";
+
         int langToken = language != null && LANGUAGE_TOKENS.containsKey(language)
                 ? LANGUAGE_TOKENS.get(language)
                 : LANGUAGE_TOKENS.get("vi");  // default to Vietnamese
 
-        int[] decoderInputIds = new int[]{SOT, langToken, TRANSCRIBE, NO_TIMESTAMPS};
+        ArrayList<Integer> outputTokens = new ArrayList<>();
+        long[] currentTokens = new long[]{SOT, langToken, TRANSCRIBE, NO_TIMESTAMPS};
+        
+        try {
+            for (int i = 0; i < MAX_TOKENS; i++) {
+                long[] shape = new long[]{1, currentTokens.length};
+                OnnxTensor inputIds = OnnxTensor.createTensor(env, java.nio.LongBuffer.wrap(currentTokens), shape);
 
-        StringBuilder result = new StringBuilder();
+                Map<String, OnnxTensor> inputs = new HashMap<>();
+                inputs.put("input_ids", inputIds);
+                inputs.put("encoder_hidden_states", encoderOutput);
 
-        // Autoregressive decoding
-        for (int step = 0; step < MAX_TOKENS; step++) {
-            // [Simplified — full implementation would use KV-cache]
-            // This provides the framework; production code would implement
-            // the full autoregressive loop with ONNX decoder sessions.
-            break;  // Placeholder — see TranslationModule for full KV-cache example
+                try (OrtSession.Result result = decoderSession.run(inputs)) {
+                    float[][][] logits = (float[][][]) result.get(0).getValue();
+                    int nextToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
+                    
+                    if (nextToken == EOT || i == MAX_TOKENS - 1) {
+                        inputIds.close();
+                        break;
+                    }
+
+                    outputTokens.add(nextToken);
+                    
+                    // Update tokens for next step
+                    long[] nextTokens = new long[currentTokens.length + 1];
+                    System.arraycopy(currentTokens, 0, nextTokens, 0, currentTokens.length);
+                    nextTokens[currentTokens.length] = nextToken;
+                    currentTokens = nextTokens;
+                }
+                inputIds.close();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "ASR decoder loop error", e);
         }
 
-        return result.toString().trim();
+        // TODO: This needs a Whisper-specific tokenizer to convert IDs back to text.
+        // For now, returning a placeholder or logged tokens.
+        Log.i(TAG, "Decoded tokens: " + outputTokens.toString());
+        return "Speech detected (Decoding IDs: " + outputTokens.size() + " tokens)";
     }
 
     // ----------------------------------------------------------------

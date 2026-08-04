@@ -29,6 +29,13 @@ public class AudioPlayer {
     public void play(String audioPath) {
         stop();
 
+        if (audioPath == null) return;
+        java.io.File audioFile = new java.io.File(audioPath);
+        if (!audioFile.exists() || audioFile.length() == 0) {
+            Log.w(TAG, "Audio file does not exist or is empty: " + audioPath);
+            return;
+        }
+
         try {
             mediaPlayer = new MediaPlayer();
             mediaPlayer.setDataSource(audioPath);

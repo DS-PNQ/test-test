@@ -53,6 +53,7 @@ public class LoadingActivity extends AppCompatActivity {
                         app.initializeTTS(new OmniVoiceApp.InitListener() {
                             @Override
                             public void onInitialized() {
+                                app.createOrchestrator();
                                 updateStatus("Ready!", 100);
                                 navigateToTranslation();
                             }

@@ -6,7 +6,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.1.4'
+        classpath 'com.android.tools.build:gradle:9.3.1'
     }
 }
 
@@ -15,6 +15,7 @@ allprojects {
         google()
         mavenCentral()
     }
+    buildDir = "D:/gradle_builds/${rootProject.name}/${project.name}"
 }
 
 task clean(type: Delete) {

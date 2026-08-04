@@ -143,6 +143,11 @@ public class TranslationActivity extends AppCompatActivity {
     }
 
     private void startRecording() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestAudioPermission();
+            return;
+        }
         if (isRecording) return;
         isRecording = true;
         talkButton.setText(R.string.btn_recording);
@@ -159,6 +164,11 @@ public class TranslationActivity extends AppCompatActivity {
         isRecording = false;
         talkButton.setText(R.string.btn_talk);
         transcriptView.setText("Processing...");
+
+        if (orchestrator == null) {
+            OmniVoiceApp app = (OmniVoiceApp) getApplication();
+            orchestrator = app.getOrchestrator();
+        }
 
         String audioPath = recorder.stopRecording();
         if (audioPath == null || orchestrator == null) {

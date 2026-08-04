@@ -1,31 +1,28 @@
 /*
- * OmniVoice — SentencePiece Tokenizer (Java wrapper)
- *
- * Modeled after RTranslator-2.00's Tokenizer.java but scoped to
- * VN/EN/CN only.  Wraps the native SentencePiece JNI library.
+ * OmniVoice — Tokenizer using DJL SentencePiece
  */
 
 package com.omnivoice.onspeak47.pipeline;
 
 import android.util.Log;
-
+import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.List;
 
+import ai.djl.sentencepiece.SpTokenizer;
+import ai.djl.sentencepiece.SpProcessor;
 
 /**
- * SentencePiece BPE tokenizer for NLLB-200.
- *
- * Handles the ID mapping differences between SentencePiece's raw output
- * and NLLB's expected token IDs (same logic as RTranslator-2.00).
+ * Tokenizer for NLLB-200 using DJL SentencePiece.
  */
 public class Tokenizer {
 
     private static final String TAG = "Tokenizer";
-
     public static final int NLLB = 0;
 
-    private final SentencePieceProcessorJava spProcessor;
-    private final int mode;
+    private SpTokenizer spTokenizer;
 
     // NLLB language codes sorted by their embedding ID order
     private static final String[] LANGUAGES_NLLB = {
@@ -68,60 +65,51 @@ public class Tokenizer {
     private static final int DICTIONARY_LENGTH = 256000;
 
     public Tokenizer(String vocabFile, int mode) {
-        spProcessor = new SentencePieceProcessorJava();
-        spProcessor.Load(vocabFile);
-        this.mode = mode;
+        try {
+            Path path = Paths.get(vocabFile);
+            this.spTokenizer = new SpTokenizer(path);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to load SentencePiece model: " + vocabFile, e);
+        }
     }
 
-    /**
-     * Tokenize text for NLLB translation.
-     *
-     * @param srcLanguage NLLB FLORES-200 source language code
-     * @param tgtLanguage NLLB FLORES-200 target language code
-     * @param text        Input text
-     * @return TokenizerResult with input IDs and attention mask
-     */
     public TokenizerResult tokenize(String srcLanguage, String tgtLanguage, String text) {
-        // Encode text via SentencePiece
-        int[] ids = spProcessor.encode(text);
+        if (spTokenizer == null) return null;
 
-        // Adjust IDs for NLLB's token mapping
-        // (NLLB has a +1 offset and different special token IDs)
-        for (int i = 0; i < ids.length; i++) {
-            ids[i] = ids[i] + 1;
-            // Remap special tokens 1→3, 2→0, 3→2
-            switch (ids[i]) {
-                case 1: ids[i] = 3; break;
-                case 2: ids[i] = 0; break;
-                case 3: ids[i] = 2; break;
+        SpProcessor processor = spTokenizer.getProcessor();
+        int[] originalIds = processor.encode(text);
+        int[] ids = new int[originalIds.length];
+
+        for (int i = 0; i < originalIds.length; i++) {
+            int id = originalIds[i] + 1;
+            switch (id) {
+                case 1: id = 3; break;
+                case 2: id = 0; break;
+                case 3: id = 2; break;
             }
+            ids[i] = id;
         }
 
-        // Add source language token at start, EOS at end
         int eos = pieceToId("</s>");
         int srcLangId = getLanguageID(srcLanguage);
 
         int[] idsExtended = new int[ids.length + 2];
-        System.arraycopy(ids, 0, idsExtended, 1, ids.length);
-        idsExtended[0] = srcLangId;
-        idsExtended[idsExtended.length - 1] = eos;
+        System.arraycopy(ids, 0, idsExtended, 0, ids.length);
+        idsExtended[ids.length] = eos;
+        idsExtended[ids.length + 1] = srcLangId;
 
-        // Create attention mask (all 1s)
         int[] attentionMask = new int[idsExtended.length];
         Arrays.fill(attentionMask, 1);
 
         return new TokenizerResult(idsExtended, attentionMask);
     }
 
-    /**
-     * Decode token IDs back to text.
-     */
     public String decode(int[] ids) {
-        // Reverse the NLLB ID adjustments
+        if (spTokenizer == null) return "";
+
         int[] adjustedIds = new int[ids.length];
         for (int i = 0; i < ids.length; i++) {
             int id = ids[i];
-            // Reverse remap: 3→1, 0→2, 2→3
             switch (id) {
                 case 3: id = 1; break;
                 case 0: id = 2; break;
@@ -129,16 +117,16 @@ public class Tokenizer {
             }
             adjustedIds[i] = Math.max(0, id - 1);
         }
-        return spProcessor.decode(adjustedIds);
+        
+        return spTokenizer.getProcessor().decode(adjustedIds);
     }
 
-    /**
-     * Get the token ID for a special piece like "</s>".
-     */
     public int pieceToId(String piece) {
-        int id = spProcessor.PieceToID(piece);
-        // Apply NLLB offset
-        id = id + 1;
+        if (spTokenizer == null) return 0;
+        int[] ids = spTokenizer.getProcessor().encode(piece);
+        if (ids.length == 0) return 0;
+        
+        int id = ids[0] + 1;
         switch (id) {
             case 1: return 3;
             case 2: return 0;
@@ -147,22 +135,14 @@ public class Tokenizer {
         }
     }
 
-    /**
-     * Get the language embedding ID for an NLLB language code.
-     */
-    private int getLanguageID(String languageCode) {
+    public int getLanguageID(String languageCode) {
         for (int i = 0; i < LANGUAGES_NLLB.length; i++) {
             if (LANGUAGES_NLLB[i].equals(languageCode)) {
                 return DICTIONARY_LENGTH + 1 + i;
             }
         }
-        Log.e(TAG, "Unknown NLLB language code: " + languageCode);
-        return DICTIONARY_LENGTH + 1;  // fallback to first language
+        return DICTIONARY_LENGTH + 1;
     }
-
-    // ----------------------------------------------------------------
-    // Result
-    // ----------------------------------------------------------------
 
     public static class TokenizerResult {
         public final int[] inputIDs;
