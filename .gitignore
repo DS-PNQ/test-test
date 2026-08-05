@@ -17,6 +17,8 @@ __pycache__/
 # Android
 android/.gradle/
 android/app/build/
+android/build/
+android/local.properties
 android/.idea/
 *.keystore
 

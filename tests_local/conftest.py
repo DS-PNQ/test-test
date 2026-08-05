@@ -1,5 +1,6 @@
 import datetime
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,8 +13,9 @@ DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 # Paths to the large VI↔ZH corpora (external to the repo).
-VIZH_TEST_DIR = Path(r"C:\Users\Asus\Documents\New projects\test vi-zh")
-VIZH_TRAIN_DIR = Path(r"C:\Users\Asus\Documents\New projects\train vi-zh")
+# Set via environment variables for portability across machines.
+VIZH_TEST_DIR = Path(os.environ.get("VIZH_TEST_DIR", str(Path.home() / "Documents" / "vizh_test")))
+VIZH_TRAIN_DIR = Path(os.environ.get("VIZH_TRAIN_DIR", str(Path.home() / "Documents" / "vizh_train")))
 
 _results: list[dict] = []
 

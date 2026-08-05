@@ -65,7 +65,15 @@ public class TranslationModule {
             Log.e(TAG, "Extensions library not found", e);
         }
         
-        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT);
+        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+
+        // Try to use NNAPI for hardware acceleration (NPU/GPU/DSP)
+        try {
+            options.addNnapi();
+            Log.i(TAG, "NNAPI execution provider enabled");
+        } catch (OrtException e) {
+            Log.w(TAG, "NNAPI not available, using CPU fallback", e);
+        }
 
         encoderSession = env.createSession(encoderPath, options);
         decoderSession = env.createSession(decoderPath, options);

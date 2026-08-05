@@ -111,32 +111,73 @@ public class OmniVoiceApp extends Application {
     }
 
     /**
-     * Initialize all three modules and create the pipeline orchestrator.
+     * Initialize all three modules in parallel and create the pipeline orchestrator.
+     * This significantly reduces startup time compared to sequential loading.
      */
     public void initializeAll(@NonNull InitListener listener) {
-        initializeASR(new InitListener() {
-            @Override
-            public void onInitialized() {
-                initializeTranslation(new InitListener() {
-                    @Override
-                    public void onInitialized() {
-                        initializeTTS(new InitListener() {
-                            @Override
-                            public void onInitialized() {
-                                orchestrator = new PipelineOrchestrator(asrModule, translationModule, ttsModule);
-                                listener.onInitialized();
-                            }
-                            @Override
-                            public void onError(String message) { listener.onError(message); }
-                        });
-                    }
-                    @Override
-                    public void onError(String message) { listener.onError(message); }
-                });
+        new Thread(() -> {
+            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(3);
+            final String[] errors = new String[3];
+
+            // Load ASR in parallel
+            new Thread(() -> {
+                try {
+                    asrModule = new ASRModule(OmniVoiceApp.this);
+                    Log.i(TAG, "ASR module loaded");
+                } catch (Exception e) {
+                    Log.e(TAG, "ASR init failed", e);
+                    errors[0] = "ASR initialization failed: " + e.getMessage();
+                } finally {
+                    latch.countDown();
+                }
+            }).start();
+
+            // Load Translation in parallel
+            new Thread(() -> {
+                try {
+                    translationModule = new TranslationModule(OmniVoiceApp.this);
+                    Log.i(TAG, "Translation module loaded");
+                } catch (Exception e) {
+                    Log.e(TAG, "Translation init failed", e);
+                    errors[1] = "Translation initialization failed: " + e.getMessage();
+                } finally {
+                    latch.countDown();
+                }
+            }).start();
+
+            // Load TTS in parallel
+            new Thread(() -> {
+                try {
+                    ttsModule = new TTSModule(OmniVoiceApp.this);
+                    Log.i(TAG, "TTS module loaded");
+                } catch (Exception e) {
+                    Log.e(TAG, "TTS init failed", e);
+                    errors[2] = "TTS initialization failed: " + e.getMessage();
+                } finally {
+                    latch.countDown();
+                }
+            }).start();
+
+            try {
+                latch.await(); // Wait for all three to complete
+            } catch (InterruptedException e) {
+                Log.e(TAG, "Model loading interrupted", e);
+                mainHandler.post(() -> listener.onError("Model loading interrupted"));
+                return;
             }
-            @Override
-            public void onError(String message) { listener.onError(message); }
-        });
+
+            // Check for errors
+            for (String error : errors) {
+                if (error != null) {
+                    mainHandler.post(() -> listener.onError(error));
+                    return;
+                }
+            }
+
+            // All loaded successfully — create orchestrator
+            orchestrator = new PipelineOrchestrator(asrModule, translationModule, ttsModule);
+            mainHandler.post(listener::onInitialized);
+        }).start();
     }
 
     /**

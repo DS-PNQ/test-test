@@ -15,7 +15,6 @@ allprojects {
         google()
         mavenCentral()
     }
-    buildDir = "D:/gradle_builds/${rootProject.name}/${project.name}"
 }
 
 task clean(type: Delete) {
