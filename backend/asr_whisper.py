@@ -79,7 +79,7 @@ class WhisperASR:
 
         # Build generation kwargs
         gen_kwargs: dict = {
-            "max_new_tokens": 448,
+            "max_new_tokens": 440,
             "return_timestamps": True,
         }
         if language is not None:
@@ -120,7 +120,7 @@ class WhisperASR:
             return_tensors="pt",
         ).input_features
 
-        gen_kwargs: dict = {"max_new_tokens": 448}
+        gen_kwargs: dict = {"max_new_tokens": 440}
         if language is not None:
             gen_kwargs["language"] = language
             gen_kwargs["task"] = "transcribe"

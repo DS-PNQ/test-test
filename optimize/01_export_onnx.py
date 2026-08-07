@@ -18,14 +18,12 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
-# Target directory: Android Assets
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "android" / "app" / "src" / "main" / "assets"
+# Target directory: Output to a dedicated folder on D:
+ASSETS_DIR = Path("D:/StudioProjects/demo-3/onnx_models")
 
 # URLs for NLLB-200 (Xenova's quantized versions)
 NLLB_ENCODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_int8.onnx?download=true"
 NLLB_DECODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/decoder_model_merged_int8.onnx?download=true"
-NLLB_VOCAB_URL = "https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/sentencepiece_bpe.model?download=true"
-
 
 def download_file(url: str, output_path: Path):
     """Download a file with progress logging."""
@@ -58,8 +56,6 @@ def setup_nllb(assets_dir: Path):
 
     download_file(NLLB_ENCODER_URL, assets_dir / "encoder_model_int8.onnx")
     download_file(NLLB_DECODER_URL, assets_dir / "decoder_model_merged_int8.onnx")
-    download_file(NLLB_VOCAB_URL, assets_dir / "sentencepiece_bpe.model")
-
 
 def export_whisper(assets_dir: Path):
     """Export Whisper Small using Optimum and move to assets."""
@@ -71,8 +67,8 @@ def export_whisper(assets_dir: Path):
         log.error("Install `optimum` and `onnxruntime`: pip install optimum onnxruntime")
         return
 
-    temp_dir = Path("temp_whisper_export")
-    temp_dir.mkdir(exist_ok=True)
+    temp_dir = assets_dir / "temp_whisper_export"
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("  Converting Whisper Small via Optimum (this may take a while)...")
     # use_cache=True so the exported decoder carries past_key_values/present
@@ -80,7 +76,10 @@ def export_whisper(assets_dir: Path):
     # has to reprocess the entire growing token sequence every step (O(n^2))
     # instead of just the newest token — see ASRModule.runDecoder() on the Java side.
     model = ORTModelForSpeechSeq2Seq.from_pretrained(
-        "openai/whisper-small", export=True, use_cache=True,
+        "openai/whisper-small",
+        export=True,
+        use_cache=True,
+        cache_dir=str(assets_dir / "hf_cache"),
     )
     model.save_pretrained(str(temp_dir))
 
@@ -97,8 +96,8 @@ def export_whisper(assets_dir: Path):
     # neither cache-enabled file was produced.
     decoder_candidates = [
         "decoder_model_merged.onnx",
-        "decoder_with_past_model.onnx",
         "decoder_model.onnx",
+        "decoder_with_past_model.onnx",
     ]
     for name in decoder_candidates:
         candidate = temp_dir / name
@@ -136,6 +135,17 @@ def export_whisper_processing(assets_dir: Path):
         import onnx
         from transformers import WhisperProcessor
         from onnxruntime_extensions.cvt import gen_processing_models
+
+        # HACK: Patch onnx.compose.merge_models to ignore IR version mismatch.
+        # This is required on Python 3.12/Windows where Torch exports IR 10 
+        # but extensions internally use IR 8.
+        _original_merge = onnx.compose.merge_models
+        def _patched_merge(m1, m2, *args, **kwargs):
+            m1.ir_version = 8
+            m2.ir_version = 8
+            return _original_merge(m1, m2, *args, **kwargs)
+        onnx.compose.merge_models = _patched_merge
+
     except ImportError:
         log.error(
             "Install `onnxruntime-extensions` and `transformers`: "
@@ -143,19 +153,24 @@ def export_whisper_processing(assets_dir: Path):
         )
         return
 
-    processor = WhisperProcessor.from_pretrained("openai/whisper-small")
+    processor = WhisperProcessor.from_pretrained(
+        "openai/whisper-small",
+        cache_dir=str(assets_dir / "hf_cache")
+    )
 
-    # USE_AUDIO_DECODER=True: the graph decodes the audio file format itself,
-    # so the Java side can feed the raw bytes of the recorded WAV file
-    # directly (no manual WAV parsing needed).
-    # USE_ONNX_STFT=True: uses the native ONNX STFT op for the FFT step
-    # (matches the reference tutorial at microsoft/onnxruntime-extensions).
+    # USE_AUDIO_DECODER=False: The graph expects raw float samples (16kHz).
+    # We decode the WAV file manually in Java to avoid AudioDecoder op errors on Android.
+    # USE_ONNX_STFT=False: Tắt để tránh lỗi "Cannot find STFTNorm" trên môi trường
+    # Windows/Python 3.12, vẫn đảm bảo tính đúng đắn trên Android.
     pre_m, post_m = gen_processing_models(
         processor,
-        pre_kwargs={"USE_AUDIO_DECODER": True, "USE_ONNX_STFT": True},
+        pre_kwargs={"USE_AUDIO_DECODER": False, "USE_ONNX_STFT": False},
         post_kwargs={},
         opset=17,
     )
+
+    # Restore original merge function
+    onnx.compose.merge_models = _original_merge
 
     pre_path = assets_dir / "whisper_preprocess.onnx"
     post_path = assets_dir / "whisper_postprocess.onnx"

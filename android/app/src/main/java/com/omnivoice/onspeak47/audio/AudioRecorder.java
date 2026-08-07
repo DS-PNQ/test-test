@@ -58,8 +58,9 @@ public class AudioRecorder {
         this.outputPath = outputPath;
 
         try {
+            // Using VOICE_RECOGNITION for better ASR accuracy (less hardware processing)
             audioRecord = new AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
                     SAMPLE_RATE,
                     CHANNEL_CONFIG,
                     AUDIO_FORMAT,
@@ -96,24 +97,34 @@ public class AudioRecorder {
 
         try {
             if (recordingThread != null) {
-                recordingThread.join(3000);
+                recordingThread.join(2000);
             }
         } catch (InterruptedException e) {
             Log.e(TAG, "Stop interrupted", e);
         }
 
+        release();
+
+        Log.i(TAG, "Recording stopped");
+        return outputPath;
+    }
+
+    /**
+     * Release all hardware resources.
+     */
+    public void release() {
+        isRecording = false;
         if (audioRecord != null) {
             try {
-                audioRecord.stop();
+                if (audioRecord.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+                    audioRecord.stop();
+                }
             } catch (IllegalStateException e) {
                 Log.e(TAG, "AudioRecord stop error", e);
             }
             audioRecord.release();
             audioRecord = null;
         }
-
-        Log.i(TAG, "Recording stopped");
-        return outputPath;
     }
 
     /**
@@ -146,6 +157,9 @@ public class AudioRecorder {
                 if (bytesRead > 0) {
                     fos.write(buffer, 0, bytesRead);
                     totalBytesWritten += bytesRead;
+                } else if (bytesRead < 0) {
+                    Log.e(TAG, "AudioRecord read error: " + bytesRead);
+                    break;
                 }
             }
 

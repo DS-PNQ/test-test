@@ -210,7 +210,7 @@ public class TranslationModule {
                             // so copy the data into a brand new, independent
                             // tensor instead of holding onto presentTensor itself.
                             nextPastKeyValues.put(pastName, OnnxTensor.createTensor(
-                                    env, presentTensor.getFloatBuffer(), presentTensor.getInfo().shape));
+                                    env, presentTensor.getFloatBuffer(), presentTensor.getInfo().getShape()));
                         }
                     }
 

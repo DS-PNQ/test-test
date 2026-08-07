@@ -21,12 +21,12 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import ai.onnxruntime.OnnxJavaType;
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OnnxValue;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
+import ai.onnxruntime.TensorInfo;
 import com.omnivoice.onspeak47.util.FileUtils;
 import com.omnivoice.onspeak47.util.TensorUtils;
 
@@ -66,7 +66,7 @@ public class ASRModule {
     // Language tokens
     private static final Map<String, Integer> LANGUAGE_TOKENS = new HashMap<>();
     static {
-        LANGUAGE_TOKENS.put("vi", 50264);
+        LANGUAGE_TOKENS.put("vi", 50278); // Corrected from 50264 (<|ko|>)
         LANGUAGE_TOKENS.put("en", 50259);
         LANGUAGE_TOKENS.put("zh", 50260);
     }
@@ -186,9 +186,12 @@ public class ASRModule {
     // ----------------------------------------------------------------
 
     private OnnxTensor runPreprocess(String audioPath) throws OrtException, IOException {
-        if (preprocessSession == null) return null;
+        if (preprocessSession == null) {
+            Log.e(TAG, "Preprocess session is null, skipping preprocessing");
+            return null;
+        }
 
-        byte[] audioBytes;
+        byte[] rawWavBytes;
         try (FileInputStream fis = new FileInputStream(audioPath)) {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             byte[] chunk = new byte[8192];
@@ -196,45 +199,56 @@ public class ASRModule {
             while ((n = fis.read(chunk)) != -1) {
                 buffer.write(chunk, 0, n);
             }
-            audioBytes = buffer.toByteArray();
+            rawWavBytes = buffer.toByteArray();
         }
 
-        // whisper_preprocess.onnx was exported with USE_AUDIO_DECODER=True, so
-        // it decodes the audio file format itself — feed the raw file bytes
-        // as-is, no manual WAV parsing needed here.
+        if (rawWavBytes.length == 0) {
+            Log.e(TAG, "Audio file is empty: " + audioPath);
+            return null;
+        }
+
         String inputName = preprocessSession.getInputNames().iterator().next();
-        long[] shape = new long[]{1, audioBytes.length};
+        long[] shape = new long[]{1, rawWavBytes.length};
         OnnxTensor audioTensor = OnnxTensor.createTensor(
-                env, java.nio.ByteBuffer.wrap(audioBytes), shape, OnnxJavaType.UINT8);
+                env, java.nio.ByteBuffer.wrap(rawWavBytes), shape);
 
         Map<String, OnnxTensor> inputs = new HashMap<>();
         inputs.put(inputName, audioTensor);
 
         try (OrtSession.Result result = preprocessSession.run(inputs)) {
             audioTensor.close();
-            // The exact output name can vary by onnxruntime-extensions version —
-            // 01_export_onnx.py logs it when you run the export; hardcode it
-            // here instead of this lookup if you want a stricter check.
             String outputName = preprocessSession.getOutputNames().iterator().next();
-            OnnxTensor melTensor = (OnnxTensor) result.get(outputName).get();
-            // Copy out before `result` (and melTensor with it) closes — same
-            // tensor-lifetime rule fixed in the KV-cache loop below.
-            return OnnxTensor.createTensor(env, melTensor.getFloatBuffer(), melTensor.getInfo().shape);
+            OnnxValue melValue = result.get(outputName).get();
+            if (!(melValue instanceof OnnxTensor)) {
+                Log.e(TAG, "Preprocess output is not a tensor: " + outputName);
+                return null;
+            }
+            OnnxTensor melTensor = (OnnxTensor) melValue;
+            Log.d(TAG, "Preprocess output shape: " + java.util.Arrays.toString(melTensor.getInfo().getShape()));
+            
+            return OnnxTensor.createTensor(env, melTensor.getFloatBuffer(), melTensor.getInfo().getShape());
         }
     }
 
     private OnnxTensor runEncoder(OnnxTensor melFeatures) throws OrtException {
-        if (encoderSession == null || melFeatures == null) return null;
+        if (encoderSession == null || melFeatures == null) {
+            Log.e(TAG, "Encoder session or mel features is null");
+            return null;
+        }
 
         Map<String, OnnxTensor> inputs = new HashMap<>();
         inputs.put("input_features", melFeatures);
 
         try (OrtSession.Result result = encoderSession.run(inputs)) {
-            OnnxTensor encoderOutput = (OnnxTensor) result.get("last_hidden_state").get();
-            // Copy out before `result` closes, same as above — the original
-            // code here never closed `result` at all (avoiding the crash by
-            // leaking it instead) so this both fixes and now correctly frees it.
-            return OnnxTensor.createTensor(env, encoderOutput.getFloatBuffer(), encoderOutput.getInfo().shape);
+            OnnxValue outputValue = result.get("last_hidden_state").get();
+            if (!(outputValue instanceof OnnxTensor)) {
+                Log.e(TAG, "Encoder output is not a tensor");
+                return null;
+            }
+            OnnxTensor encoderOutput = (OnnxTensor) outputValue;
+            Log.d(TAG, "Encoder output shape: " + java.util.Arrays.toString(encoderOutput.getInfo().getShape()));
+            
+            return OnnxTensor.createTensor(env, encoderOutput.getFloatBuffer(), encoderOutput.getInfo().getShape());
         }
     }
 
@@ -307,7 +321,12 @@ public class ASRModule {
                     float[][][] logits = (float[][][]) result.get("logits").get().getValue();
                     nextToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
 
+                    if (i < 5) {
+                        Log.d(TAG, "Step " + i + ", next token: " + nextToken + " (" + vocab.get(nextToken) + ")");
+                    }
+
                     if (nextToken == EOT || i == MAX_TOKENS - 1) {
+                        Log.i(TAG, "Decoding stopped at step " + i + (nextToken == EOT ? " (EOT)" : " (MAX_TOKENS)"));
                         break;
                     }
                     outputTokens.add(nextToken);
@@ -324,7 +343,7 @@ public class ASRModule {
                                 // keep this reference — otherwise next iteration's
                                 // run() throws IllegalStateException on a closed tensor.
                                 nextPastKeyValues.put(pastName, OnnxTensor.createTensor(
-                                        env, presentTensor.getFloatBuffer(), presentTensor.getInfo().shape));
+                                        env, presentTensor.getFloatBuffer(), presentTensor.getInfo().getShape()));
                             }
                         }
                         for (OnnxTensor t : pastKeyValues.values()) {

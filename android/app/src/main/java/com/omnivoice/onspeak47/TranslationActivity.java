@@ -241,6 +241,7 @@ public class TranslationActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         if (player != null) player.release();
+        if (recorder != null) recorder.release();
         pipelineExecutor.shutdownNow();
     }
 }

@@ -1,5 +1,8 @@
 # Models and large files
 onnx_models/
+hf_cache/
+temp_whisper_export/
+temp_export_test/
 *.onnx
 *.onnx_data
 *.model
@@ -7,6 +10,10 @@ onnx_models/
 *.pt
 *.pth
 android/app/src/main/assets/whisper_vocab.json
+
+# Test Outputs
+tests_local/output/
+docs/translation_quality_results.md
 
 # Python
 .venv/
