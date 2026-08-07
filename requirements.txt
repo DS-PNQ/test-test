@@ -17,7 +17,8 @@ pytest>=8.0              # test runner for tests_local/
 
 # --- Phase 2 ONNX export / Qualcomm AI Hub (optimize/) — not needed for local tests ---
 # Uncomment when starting the ONNX conversion / QAH submission scripts.
-optimum>=1.20
-onnx>=1.16
-onnxruntime>=1.18
-qai-hub                # Qualcomm AI Hub SDK (requires API token)
+# optimum>=1.20
+# onnx>=1.16
+# onnxruntime>=1.18
+# onnxruntime-extensions>=0.13   # generates whisper_preprocess/postprocess.onnx (audio->mel, ids->text)
+# qai-hub                # Qualcomm AI Hub SDK (requires API token)

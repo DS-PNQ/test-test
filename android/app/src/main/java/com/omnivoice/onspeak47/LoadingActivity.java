@@ -38,38 +38,24 @@ public class LoadingActivity extends AppCompatActivity {
     private void startModelLoading() {
         OmniVoiceApp app = (OmniVoiceApp) getApplication();
 
-        updateStatus("Loading ASR model (Whisper Small)...", 0);
+        updateStatus("Loading ASR, Translation and TTS models...", 0);
 
-        app.initializeASR(new OmniVoiceApp.InitListener() {
+        // The three modules are independent, so they now load in parallel
+        // (previously chained ASR → Translation → TTS, which took the sum of
+        // all three load times instead of roughly the slowest one).
+        app.initializeAll(new OmniVoiceApp.AllInitListener() {
             @Override
-            public void onInitialized() {
-                updateStatus("Loading Translation model (NLLB-200)...", 33);
+            public void onModuleReady(String moduleName, int completedCount, int totalCount) {
+                updateStatus(
+                        "Loaded " + moduleName + " (" + completedCount + "/" + totalCount + ")",
+                        completedCount * 100 / totalCount
+                );
+            }
 
-                app.initializeTranslation(new OmniVoiceApp.InitListener() {
-                    @Override
-                    public void onInitialized() {
-                        updateStatus("Loading TTS model (MMS-TTS)...", 66);
-
-                        app.initializeTTS(new OmniVoiceApp.InitListener() {
-                            @Override
-                            public void onInitialized() {
-                                app.createOrchestrator();
-                                updateStatus("Ready!", 100);
-                                navigateToTranslation();
-                            }
-
-                            @Override
-                            public void onError(String message) {
-                                showError(message);
-                            }
-                        });
-                    }
-
-                    @Override
-                    public void onError(String message) {
-                        showError(message);
-                    }
-                });
+            @Override
+            public void onAllInitialized() {
+                updateStatus("Ready!", 100);
+                navigateToTranslation();
             }
 
             @Override

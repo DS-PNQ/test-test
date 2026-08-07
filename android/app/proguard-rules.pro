@@ -3,10 +3,5 @@
 -keep class ai.onnxruntime.** { *; }
 -keep class com.microsoft.onnxruntime.** { *; }
 
-# Keep SentencePiece JNI native methods
--keepclasseswithmembernames class com.omnivoice.onspeak47.pipeline.SentencePieceProcessorJava {
-    native <methods>;
-}
-
-# Keep ML Kit language identification
--keep class com.google.mlkit.** { *; }
+# Keep DJL SentencePiece tokenizer (used by Tokenizer.java)
+-keep class ai.djl.sentencepiece.** { *; }

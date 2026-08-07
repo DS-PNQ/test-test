@@ -128,13 +128,13 @@ The Android app is in `android/`. To build:
 3. Build → Make Project (or `gradlew assembleDebug`)
 
 Required assets:
-- `NLLB_encoder.onnx`
-- `NLLB_decoder.onnx`
-- `NLLB_cache_initializer.onnx`
-- `NLLB_embed_and_lm_head.onnx`
-- `sentencepiece_bpe.model`
+- `encoder_model_int8.onnx` (NLLB)
+- `decoder_model_merged_int8.onnx` (NLLB)
+- `sentencepiece_bpe.model` (NLLB)
 - `whisper_encoder.onnx`
 - `whisper_decoder.onnx`
+- `whisper_preprocess.onnx` (audio bytes -> log-mel, via onnxruntime-extensions)
+- `whisper_vocab.json` (token ids -> text, decoded natively in ASRModule.java)
 
 ## Architecture
 

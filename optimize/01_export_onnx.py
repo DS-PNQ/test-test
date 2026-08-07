@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import shutil
 import sys
@@ -74,17 +75,115 @@ def export_whisper(assets_dir: Path):
     temp_dir.mkdir(exist_ok=True)
 
     log.info("  Converting Whisper Small via Optimum (this may take a while)...")
-    model = ORTModelForSpeechSeq2Seq.from_pretrained("openai/whisper-small", export=True)
+    # use_cache=True so the exported decoder carries past_key_values/present
+    # (KV-cache) inputs/outputs. Without this, autoregressive decoding on-device
+    # has to reprocess the entire growing token sequence every step (O(n^2))
+    # instead of just the newest token — see ASRModule.runDecoder() on the Java side.
+    model = ORTModelForSpeechSeq2Seq.from_pretrained(
+        "openai/whisper-small", export=True, use_cache=True,
+    )
     model.save_pretrained(str(temp_dir))
 
     # Move and rename specific files
     log.info("  Moving Whisper models to assets...")
     shutil.move(str(temp_dir / "encoder_model.onnx"), str(assets_dir / "whisper_encoder.onnx"))
-    shutil.move(str(temp_dir / "decoder_model.onnx"), str(assets_dir / "whisper_decoder.onnx"))
+
+    # Depending on the installed Optimum version, the cache-enabled decoder can
+    # come out as a single merged graph (preferred — has a use_cache_branch input,
+    # same pattern as decoder_model_merged_int8.onnx for NLLB) or as a separate
+    # "with past" file alongside the cache-less decoder_model.onnx. Prefer the
+    # merged file, then with-past, and only fall back to the plain decoder (no
+    # cache — ASRModule will auto-detect this and use the slower loop) if
+    # neither cache-enabled file was produced.
+    decoder_candidates = [
+        "decoder_model_merged.onnx",
+        "decoder_with_past_model.onnx",
+        "decoder_model.onnx",
+    ]
+    for name in decoder_candidates:
+        candidate = temp_dir / name
+        if candidate.exists():
+            if name == "decoder_model.onnx":
+                log.warning(
+                    "  No cache-enabled decoder file found (checked %s) — "
+                    "falling back to decoder_model.onnx (no KV-cache, slower on-device).",
+                    decoder_candidates[:-1],
+                )
+            shutil.move(str(candidate), str(assets_dir / "whisper_decoder.onnx"))
+            break
+    else:
+        log.error(f"  [Error] No decoder ONNX file found among {decoder_candidates} in {temp_dir}")
 
     # Cleanup
     shutil.rmtree(temp_dir)
     log.info(f"  [Done] Whisper models saved to {assets_dir}")
+
+
+def export_whisper_processing(assets_dir: Path):
+    """Export Whisper's pre-processing (raw audio bytes -> log-mel features)
+    and post-processing (token ids -> text) as their own ONNX graphs, using
+    onnxruntime-extensions. This replaces two things that previously had to
+    be hand-implemented in Java and were left as stubs:
+      - ASRModule.extractMelFeatures() (was returning an all-zero array —
+        FFT + mel-filterbank is exactly what USE_ONNX_STFT does here)
+      - a Whisper-specific BPE detokenizer (was returning a token-count
+        placeholder string instead of real text)
+    Both stubs can be replaced by just running these two extra ONNX sessions
+    from Java instead of hand-writing DSP/BPE code that's hard to verify.
+    """
+    log.info("Exporting Whisper pre/post-processing graphs (onnxruntime-extensions)...")
+    try:
+        import onnx
+        from transformers import WhisperProcessor
+        from onnxruntime_extensions.cvt import gen_processing_models
+    except ImportError:
+        log.error(
+            "Install `onnxruntime-extensions` and `transformers`: "
+            "pip install onnxruntime-extensions transformers"
+        )
+        return
+
+    processor = WhisperProcessor.from_pretrained("openai/whisper-small")
+
+    # USE_AUDIO_DECODER=True: the graph decodes the audio file format itself,
+    # so the Java side can feed the raw bytes of the recorded WAV file
+    # directly (no manual WAV parsing needed).
+    # USE_ONNX_STFT=True: uses the native ONNX STFT op for the FFT step
+    # (matches the reference tutorial at microsoft/onnxruntime-extensions).
+    pre_m, post_m = gen_processing_models(
+        processor,
+        pre_kwargs={"USE_AUDIO_DECODER": True, "USE_ONNX_STFT": True},
+        post_kwargs={},
+        opset=17,
+    )
+
+    pre_path = assets_dir / "whisper_preprocess.onnx"
+    post_path = assets_dir / "whisper_postprocess.onnx"
+    onnx.save(pre_m, str(pre_path))
+    onnx.save(post_m, str(post_path))
+
+    # post_m expects token ids shaped the way the fused WhisperBeamSearch
+    # contrib op emits them, which a custom greedy-decode loop (like
+    # ASRModule.runDecoder()) doesn't produce. Detokenizing (id -> text) is a
+    # simple, stable, well-documented algorithm — unlike encoding, it doesn't
+    # need the merge-rank tables — so it's safer to hand-implement it natively
+    # in Java against a plain vocab.json than to guess post_m's exact expected
+    # input shape. Dump that vocab here; post_m is still saved above in case
+    # you want it for the fused pipeline later.
+    vocab_path = assets_dir / "whisper_vocab.json"
+    with open(vocab_path, "w", encoding="utf-8") as f:
+        json.dump(processor.tokenizer.get_vocab(), f, ensure_ascii=False)
+
+    # Print the actual graph I/O names rather than assuming them — the exact
+    # names can vary by onnxruntime-extensions version, and ASRModule.java
+    # looks these up dynamically via session.getInputNames()/getOutputNames()
+    # rather than hardcoding a guess, but it's worth confirming they look sane.
+    log.info(f"  [Done] {pre_path.name}: inputs={[i.name for i in pre_m.graph.input]} "
+             f"outputs={[o.name for o in pre_m.graph.output]}")
+    log.info(f"  [Done] {vocab_path.name}: {len(processor.tokenizer.get_vocab())} tokens "
+             "(used by ASRModule's native Java BPE decoder)")
+    log.info(f"  [Info] {post_path.name} saved but not currently used by ASRModule.java — "
+             "it expects WhisperBeamSearch-shaped input, see comment above.")
 
 
 def main():
@@ -104,6 +203,7 @@ def main():
         setup_nllb(args.assets_dir)
     if "whisper" in models:
         export_whisper(args.assets_dir)
+        export_whisper_processing(args.assets_dir)
 
     log.info("Workflow complete. Large models are now in assets/.")
     log.info("IMPORTANT: Add *.onnx and *.model to your .gitignore before pushing!")

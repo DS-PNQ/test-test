@@ -64,8 +64,24 @@ public class TranslationModule {
         } catch (OrtException e) {
             Log.e(TAG, "Extensions library not found", e);
         }
-        
-        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT);
+
+        // Was NO_OPT (graph fusion/constant-folding fully disabled) — this was
+        // leaving perf on the table for free. ALL_OPT enables every optimization
+        // ONNX Runtime supports; drop to EXTENDED_OPT if it turns out to conflict
+        // with the custom-op nodes registered above.
+        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+
+        // No execution provider beyond default CPU was ever configured, despite
+        // NPU being the stated primary target in docs/architecture.md. NNAPI is
+        // a safe first step: ORT assigns supported nodes to it and leaves the
+        // rest on CPU automatically, so this cannot make things worse, only
+        // faster where the device supports it. QNN (real NPU/Hexagon path) is a
+        // separate, bigger change — see docs/architecture.md notes.
+        try {
+            options.addNnapi();
+        } catch (OrtException e) {
+            Log.w(TAG, "NNAPI EP unavailable on this device, falling back to CPU", e);
+        }
 
         encoderSession = env.createSession(encoderPath, options);
         decoderSession = env.createSession(decoderPath, options);
@@ -185,7 +201,16 @@ public class TranslationModule {
                     for (Map.Entry<String, OnnxValue> entry : stepResult) {
                         if (entry.getKey().startsWith("present")) {
                             String pastName = entry.getKey().replace("present", "past_key_values");
-                            nextPastKeyValues.put(pastName, (OnnxTensor) entry.getValue());
+                            OnnxTensor presentTensor = (OnnxTensor) entry.getValue();
+                            // stepResult (and every OnnxValue it owns, including
+                            // presentTensor) gets closed the instant this
+                            // try-with-resources block exits. Keeping the
+                            // reference around and feeding it into next
+                            // iteration's run() throws IllegalStateException —
+                            // so copy the data into a brand new, independent
+                            // tensor instead of holding onto presentTensor itself.
+                            nextPastKeyValues.put(pastName, OnnxTensor.createTensor(
+                                    env, presentTensor.getFloatBuffer(), presentTensor.getInfo().shape));
                         }
                     }
 

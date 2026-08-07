@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 
-DEFAULT_TEST_DIR = Path(r"C:\Users\Asus\Documents\New projects\test vi-zh")
-DEFAULT_TRAIN_DIR = Path(r"C:\Users\Asus\Documents\New projects\train vi-zh")
+DEFAULT_TEST_DIR = Path(os.environ.get("VIZH_TEST_DIR", "test vi-zh"))
+DEFAULT_TRAIN_DIR = Path(os.environ.get("VIZH_TRAIN_DIR", "train vi-zh"))
 
 
 def load_parallel_corpus(

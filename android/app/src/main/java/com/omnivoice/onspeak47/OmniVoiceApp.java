@@ -10,6 +10,9 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -111,32 +114,53 @@ public class OmniVoiceApp extends Application {
     }
 
     /**
-     * Initialize all three modules and create the pipeline orchestrator.
+     * Initialize all three modules in parallel and create the pipeline
+     * orchestrator once all are ready.
+     *
+     * Previously this method (and the LoadingActivity call site) chained the
+     * three inits sequentially — ASR done, then start Translation, then start
+     * TTS — even though the three modules are fully independent. That made
+     * startup take asrMs + translationMs + ttsMs instead of roughly
+     * max(asrMs, translationMs, ttsMs). Kicking all three off at once fixes that.
      */
-    public void initializeAll(@NonNull InitListener listener) {
-        initializeASR(new InitListener() {
+    public void initializeAll(@NonNull AllInitListener listener) {
+        if (asrModule != null && translationModule != null && ttsModule != null) {
+            createOrchestrator();
+            listener.onAllInitialized();
+            return;
+        }
+
+        final int total = 3;
+        AtomicInteger completed = new AtomicInteger(0);
+        AtomicBoolean failed = new AtomicBoolean(false);
+
+        initializeASR(trackingListener("ASR (Whisper Small)", completed, total, failed, listener));
+        initializeTranslation(trackingListener("Translation (NLLB-200)", completed, total, failed, listener));
+        initializeTTS(trackingListener("TTS (MMS-TTS)", completed, total, failed, listener));
+    }
+
+    /** Wraps a per-module InitListener that reports progress into the shared AllInitListener. */
+    private InitListener trackingListener(String moduleName, AtomicInteger completed, int total,
+                                           AtomicBoolean failed, AllInitListener listener) {
+        return new InitListener() {
             @Override
             public void onInitialized() {
-                initializeTranslation(new InitListener() {
-                    @Override
-                    public void onInitialized() {
-                        initializeTTS(new InitListener() {
-                            @Override
-                            public void onInitialized() {
-                                orchestrator = new PipelineOrchestrator(asrModule, translationModule, ttsModule);
-                                listener.onInitialized();
-                            }
-                            @Override
-                            public void onError(String message) { listener.onError(message); }
-                        });
-                    }
-                    @Override
-                    public void onError(String message) { listener.onError(message); }
-                });
+                int done = completed.incrementAndGet();
+                listener.onModuleReady(moduleName, done, total);
+                if (done == total && !failed.get()) {
+                    createOrchestrator();
+                    listener.onAllInitialized();
+                }
             }
             @Override
-            public void onError(String message) { listener.onError(message); }
-        });
+            public void onError(String message) {
+                // First failure wins; ignore further errors/successes so the
+                // caller doesn't get onError() called more than once.
+                if (failed.compareAndSet(false, true)) {
+                    listener.onError(message);
+                }
+            }
+        };
     }
 
     /**
@@ -163,6 +187,14 @@ public class OmniVoiceApp extends Application {
 
     public interface InitListener {
         void onInitialized();
+        void onError(String message);
+    }
+
+    /** Progress-aware listener for initializeAll() (three modules loading in parallel). */
+    public interface AllInitListener {
+        /** Called on the main thread each time one of the 3 modules finishes loading. */
+        void onModuleReady(String moduleName, int completedCount, int totalCount);
+        void onAllInitialized();
         void onError(String message);
     }
 }

@@ -6,6 +6,7 @@ onnx_models/
 *.bin
 *.pt
 *.pth
+android/app/src/main/assets/whisper_vocab.json
 
 # Python
 .venv/
@@ -16,8 +17,10 @@ __pycache__/
 
 # Android
 android/.gradle/
+android/build/
 android/app/build/
 android/.idea/
+android/local.properties
 *.keystore
 
 # IDEs

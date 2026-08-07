@@ -23,8 +23,8 @@ android {
             debuggable true
         }
         release {
-            minifyEnabled false
-            shrinkResources false
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
                     'proguard-rules.pro'
         }
@@ -63,9 +63,6 @@ dependencies {
     // ONNX Runtime for on-device model inference
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.22.0'
     implementation 'com.microsoft.onnxruntime:onnxruntime-extensions-android:0.13.0'
-
-    // ML Kit for language identification
-    implementation 'com.google.mlkit:language-id:17.0.5'
 
     // SentencePiece for tokenization (DJL implementation)
     implementation 'ai.djl.sentencepiece:sentencepiece:0.36.0'

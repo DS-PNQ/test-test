@@ -15,7 +15,10 @@ allprojects {
         google()
         mavenCentral()
     }
-    buildDir = "D:/gradle_builds/${rootProject.name}/${project.name}"
+    // NOTE: previously hardcoded to "D:/gradle_builds/..." which broke the build
+    // on any machine without that exact drive/folder (teammates, CI, judges).
+    // If you want build output outside the source tree, use an env var instead:
+    // buildDir = System.getenv("GRADLE_BUILD_DIR") ?: buildDir
 }
 
 task clean(type: Delete) {

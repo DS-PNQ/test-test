@@ -30,6 +30,8 @@ import com.omnivoice.onspeak47.pipeline.PipelineOrchestrator;
 import com.omnivoice.onspeak47.util.LanguageConfig;
 
 import java.io.File;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 
 /**
@@ -56,6 +58,10 @@ public class TranslationActivity extends AppCompatActivity {
     private PipelineOrchestrator orchestrator;
     private AudioRecorder recorder;
     private AudioPlayer player;
+    // Reused across requests instead of a `new Thread()` per talk-button press;
+    // single-thread so a new request naturally queues behind an in-flight one
+    // rather than racing it.
+    private final ExecutorService pipelineExecutor = Executors.newSingleThreadExecutor();
 
     // State
     private String srcLang = "vi";
@@ -177,7 +183,7 @@ public class TranslationActivity extends AppCompatActivity {
         }
 
         // Run pipeline in background
-        new Thread(() -> {
+        pipelineExecutor.submit(() -> {
             try {
                 PipelineOrchestrator.PipelineResult result =
                         orchestrator.process(audioPath, srcLang, tgtLang);
@@ -200,7 +206,7 @@ public class TranslationActivity extends AppCompatActivity {
                 Log.e(TAG, "Pipeline error", e);
                 runOnUiThread(() -> transcriptView.setText("Error: " + e.getMessage()));
             }
-        }).start();
+        });
     }
 
     // ----------------------------------------------------------------
@@ -235,5 +241,6 @@ public class TranslationActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         if (player != null) player.release();
+        pipelineExecutor.shutdownNow();
     }
 }
