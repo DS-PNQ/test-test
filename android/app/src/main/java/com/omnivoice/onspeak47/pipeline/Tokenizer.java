@@ -66,8 +66,14 @@ public class Tokenizer {
 
     public Tokenizer(String vocabFile, int mode) {
         try {
+            File file = new File(vocabFile);
+            if (!file.exists()) {
+                Log.e(TAG, "SentencePiece model file not found: " + vocabFile);
+                return;
+            }
             Path path = Paths.get(vocabFile);
             this.spTokenizer = new SpTokenizer(path);
+            Log.i(TAG, "SentencePiece model loaded: " + vocabFile);
         } catch (Exception e) {
             Log.e(TAG, "Failed to load SentencePiece model: " + vocabFile, e);
         }

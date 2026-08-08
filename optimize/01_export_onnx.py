@@ -24,6 +24,12 @@ ASSETS_DIR = Path("D:/StudioProjects/demo-3/onnx_models")
 # URLs for NLLB-200 (Xenova's quantized versions)
 NLLB_ENCODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_int8.onnx?download=true"
 NLLB_DECODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/decoder_model_merged_int8.onnx?download=true"
+# SentencePiece model for NLLB tokenization (from the original Facebook repo).
+# The Java code (TranslationModule.java) expects this file under the name
+# "sentencepiece_bpe.model", so we download "sentencepiece.bpe.model" and
+# rename it during setup.
+NLLB_SPM_URL = "https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/sentencepiece.bpe.model"
+NLLB_SPM_DEST = "sentencepiece_bpe.model"
 
 def download_file(url: str, output_path: Path):
     """Download a file with progress logging."""
@@ -50,12 +56,30 @@ def download_file(url: str, output_path: Path):
 
 
 def setup_nllb(assets_dir: Path):
-    """Download pre-quantized NLLB-200 models."""
+    """Download pre-quantized NLLB-200 models and SentencePiece tokenizer."""
     log.info("Setting up NLLB-200 models...")
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     download_file(NLLB_ENCODER_URL, assets_dir / "encoder_model_int8.onnx")
     download_file(NLLB_DECODER_URL, assets_dir / "decoder_model_merged_int8.onnx")
+    # Download the SentencePiece model for the NLLB tokenizer.
+    # Crucially, save it as "sentencepiece_bpe.model" — this is the exact
+    # filename TranslationModule.java looks for (VOCAB_FILE constant).
+    # HuggingFace ships the file as "sentencepiece.bpe.model", so we
+    # download to a temp name then rename to match the Java expectation.
+    spm_tmp = assets_dir / "sentencepiece.bpe.model"
+    spm_dest = assets_dir / NLLB_SPM_DEST
+    download_file(NLLB_SPM_URL, spm_tmp)
+    if spm_tmp.exists():
+        if spm_dest.exists():
+            log.info(f"  [Skip] {spm_dest.name} already exists.")
+        else:
+            shutil.move(str(spm_tmp), str(spm_dest))
+            log.info(f"  [Done] Renamed sentencepiece.bpe.model -> {spm_dest.name}")
+    else:
+        log.error("  [Error] SentencePiece model download failed — NLLB tokenization "
+                  "will not work on Android. TranslationModule.java needs "
+                  "'sentencepiece_bpe.model' in assets.")
 
 def export_whisper(assets_dir: Path):
     """Export Whisper Small using Optimum and move to assets."""

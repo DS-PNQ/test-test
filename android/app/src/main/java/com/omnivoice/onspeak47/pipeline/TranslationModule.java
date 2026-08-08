@@ -29,7 +29,12 @@ public class TranslationModule {
 
     private static final String ENCODER_FILE = "encoder_model_int8.onnx";
     private static final String DECODER_FILE = "decoder_model_merged_int8.onnx";
+    // HuggingFace ships the NLLB SentencePiece model as "sentencepiece.bpe.model",
+    // but the export script renames it to "sentencepiece_bpe.model" to match
+    // this constant. We try both names so the app degrades gracefully if the
+    // asset was copied with either name.
     private static final String VOCAB_FILE = "sentencepiece_bpe.model";
+    private static final String VOCAB_FILE_ALT = "sentencepiece.bpe.model";
 
     private static final int MAX_OUTPUT_TOKENS = 256;
 
@@ -57,6 +62,18 @@ public class TranslationModule {
         String encoderPath = copyModel(context, baseDir, ENCODER_FILE);
         String decoderPath = copyModel(context, baseDir, DECODER_FILE);
         String vocabPath = copyModel(context, baseDir, VOCAB_FILE);
+        // If the primary (renamed) asset isn't in assets/, fall back to the
+        // original HuggingFace filename before giving up.
+        if (!new File(vocabPath).exists()) {
+            Log.w(TAG, VOCAB_FILE + " not found, trying " + VOCAB_FILE_ALT + "...");
+            vocabPath = copyModel(context, baseDir, VOCAB_FILE_ALT);
+        }
+        if (!new File(vocabPath).exists()) {
+            Log.e(TAG, "SentencePiece model not found in assets (tried both '" +
+                    VOCAB_FILE + "' and '" + VOCAB_FILE_ALT + "'). " +
+                    "Run optimize/01_export_onnx.py to download it. " +
+                    "NLLB tokenization will fail.");
+        }
 
         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
         try {

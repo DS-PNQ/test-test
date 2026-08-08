@@ -128,13 +128,22 @@ The Android app is in `android/`. To build:
 3. Build → Make Project (or `gradlew assembleDebug`)
 
 Required assets:
-- `NLLB_encoder.onnx`
-- `NLLB_decoder.onnx`
-- `NLLB_cache_initializer.onnx`
-- `NLLB_embed_and_lm_head.onnx`
-- `sentencepiece_bpe.model`
-- `whisper_encoder.onnx`
-- `whisper_decoder.onnx`
+- `encoder_model_int8.onnx`            (NLLB encoder — from optimize/01_export_onnx.py)
+- `decoder_model_merged_int8.onnx`     (NLLB decoder with KV-cache — from optimize/01_export_onnx.py)
+- `sentencepiece_bpe.model`            (NLLB SentencePiece tokenizer — from optimize/01_export_onnx.py)
+- `whisper_encoder.onnx`               (Whisper Small encoder — from optimize/01_export_onnx.py)
+- `whisper_decoder.onnx`               (Whisper Small decoder — from optimize/01_export_onnx.py)
+
+> **Important:** The app will show "[error: tokenization failed]" if
+> `sentencepiece_bpe.model` is missing from `assets/`. Run
+> `python optimize/01_export_onnx.py --models nllb` to download it.
+>
+> Note: Some older READMEs/guides reference `NLLB_encoder.onnx` /
+> `NLLB_decoder.onnx` / `NLLB_cache_initializer.onnx` /
+> `NLLB_embed_and_lm_head.onnx`. The current Java code loads
+> `encoder_model_int8.onnx` / `decoder_model_merged_int8.onnx` instead.
+> The app also accepts `sentencepiece.bpe.model` (the original HuggingFace
+> name) as a fallback if `sentencepiece_bpe.model` is absent.
 
 ## Architecture
 
