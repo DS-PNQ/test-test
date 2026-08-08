@@ -142,3 +142,4 @@ Required assets:
 - **ONNX Runtime** for all model inference (same as RTranslator-2.00)
 - **Qualcomm AI Hub** as primary optimization path (not vendor-locked)
 - **Wearable-ready** — pipeline design allows hardware swap without redesign
+-  python -m pytest tests_local/test_asr_unit.py -v 2>
