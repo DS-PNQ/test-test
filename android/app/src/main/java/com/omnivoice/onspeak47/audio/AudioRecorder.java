@@ -33,7 +33,7 @@ public class AudioRecorder {
 
     private AudioRecord audioRecord;
     private Thread recordingThread;
-    private boolean isRecording = false;
+    private volatile boolean isRecording = false;
     private String outputPath;
     private int bufferSize;
 
@@ -59,7 +59,7 @@ public class AudioRecorder {
 
         try {
             audioRecord = new AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
                     SAMPLE_RATE,
                     CHANNEL_CONFIG,
                     AUDIO_FORMAT,
@@ -140,16 +140,25 @@ public class AudioRecorder {
 
             byte[] buffer = new byte[bufferSize];
             long totalBytesWritten = 0;
+            int chunks = 0;
 
             while (isRecording) {
                 int bytesRead = audioRecord.read(buffer, 0, bufferSize);
                 if (bytesRead > 0) {
                     fos.write(buffer, 0, bytesRead);
                     totalBytesWritten += bytesRead;
+                    chunks++;
+                    if (chunks % 10 == 0) {
+                        Log.v(TAG, "Recorded " + totalBytesWritten + " bytes...");
+                    }
+                } else if (bytesRead < 0) {
+                    Log.e(TAG, "AudioRecord error: " + bytesRead);
+                    break;
                 }
             }
 
             fos.flush();
+            Log.i(TAG, "Finished writing audio. Total bytes: " + totalBytesWritten);
 
             // Update WAV header with actual sizes
             updateWavHeader(file, totalBytesWritten);

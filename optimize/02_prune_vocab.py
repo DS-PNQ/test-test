@@ -64,9 +64,10 @@ def prune_vocab(
     from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
     model_name = str(model_dir) if model_dir.exists() else "facebook/nllb-200-distilled-600M"
+    cache_dir = output_dir.parent / "hf_cache"
 
     log.info(f"Loading tokenizer from {model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(cache_dir))
 
     # Identify which language tokens to keep vs remove
     all_lang_tokens = [t for t in tokenizer.additional_special_tokens if t not in SPECIAL_TOKENS]
@@ -91,7 +92,7 @@ def prune_vocab(
 
     # Load model and prune embeddings
     log.info("Loading model for embedding pruning...")
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name, cache_dir=str(cache_dir))
 
     vocab_size_before = model.config.vocab_size
     embed_dim = model.config.d_model
@@ -111,32 +112,6 @@ def prune_vocab(
              f"({vocab_size_before - vocab_size_after} tokens removed)")
     log.info(f"  Embedding size: {shared_embed.shape} → {new_embed.shape}")
 
-    # ---- Apply pruned embeddings to the model ----
-    import torch.nn as nn
-
-    # Replace shared embedding
-    new_embedding_layer = nn.Embedding(vocab_size_after, embed_dim)
-    new_embedding_layer.weight.data = new_embed
-    model.model.shared = new_embedding_layer
-
-    # Replace encoder embedding
-    model.model.encoder.embed_tokens = new_embedding_layer
-
-    # Replace decoder embedding
-    model.model.decoder.embed_tokens = new_embedding_layer
-
-    # Replace lm_head (output projection)
-    new_lm_head = nn.Linear(embed_dim, vocab_size_after, bias=False)
-    new_lm_head.weight.data = new_embed.clone()
-    model.lm_head = new_lm_head
-
-    # Update config
-    model.config.vocab_size = vocab_size_after
-
-    # Save the pruned model
-    log.info(f"Saving pruned model to {output_dir}...")
-    model.save_pretrained(str(output_dir))
-
     # Save pruning metadata
     pruning_meta = {
         "original_model": model_name,
@@ -154,7 +129,6 @@ def prune_vocab(
     tokenizer.additional_special_tokens = sorted(keep_lang_tokens)
     tokenizer.save_pretrained(str(output_dir))
 
-    log.info(f"Pruned model saved to {output_dir}")
     log.info(f"Pruned model metadata saved to {meta_path}")
     log.info(f"Tokenizer saved to {output_dir}")
 

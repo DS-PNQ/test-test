@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 # ======================================================================
 
 def quantize_onnx_int8(onnx_path: Path, output_path: Path):
-    """Apply dynamic INT8 quantization to an ONNX model.
+    """Apply static INT8 quantization to an ONNX model.
 
     Uses ONNX Runtime's built-in quantization toolkit.
 

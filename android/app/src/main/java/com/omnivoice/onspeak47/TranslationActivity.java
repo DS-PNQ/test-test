@@ -176,6 +176,14 @@ public class TranslationActivity extends AppCompatActivity {
             return;
         }
 
+        File audioFile = new File(audioPath);
+        Log.i(TAG, "Audio recorded: " + audioFile.length() + " bytes at " + audioPath);
+
+        if (audioFile.length() <= 44) {
+            transcriptView.setText("Error: recording too short or silent");
+            return;
+        }
+
         // Run pipeline in background
         new Thread(() -> {
             try {

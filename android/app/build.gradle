@@ -24,7 +24,7 @@ android {
         }
         release {
             minifyEnabled true
-            shrinkResources false
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
                     'proguard-rules.pro'
         }
@@ -35,7 +35,7 @@ android {
         targetCompatibility JavaVersion.VERSION_11
     }
     androidResources {
-        noCompress 'onnx', 'model', 'onnx_data'
+        noCompress 'onnx', 'model', 'onnx_data', 'json', 'bin'
     }
     packagingOptions {
         jniLibs {
