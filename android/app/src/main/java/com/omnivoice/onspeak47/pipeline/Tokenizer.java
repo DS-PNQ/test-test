@@ -24,14 +24,16 @@
 
 package com.omnivoice.onspeak47.pipeline;
 
+import android.content.Context;
 import android.icu.text.Normalizer2;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -97,23 +99,38 @@ public class Tokenizer {
     private String unkPiece = "<unk>";
     private boolean loaded = false;
 
-    public Tokenizer(String vocabFile, int mode) {
+    /**
+     * @param context   Android context — used to read the model from assets as
+     *                  a fallback when the file-system copy doesn't exist yet.
+     * @param vocabFile Absolute path to the SentencePiece .model file on the
+     *                  file system (e.g. in externalFilesDir).
+     * @param assetName Original asset name (e.g. "sentencepiece_bpe.model")
+     *                  so we can fall back to AssetManager if vocabFile is missing.
+     * @param mode      Tokenizer mode (currently only {@link #NLLB}).
+     */
+    public Tokenizer(Context context, String vocabFile, String assetName, int mode) {
         try {
-            loadModel(vocabFile);
+            loadModel(context, vocabFile, assetName);
             loaded = true;
-            Log.i(TAG, "Loaded " + idToPiece.length + " SentencePiece pieces from " + vocabFile
+            Log.i(TAG, "Loaded " + idToPiece.length + " SentencePiece pieces"
                     + " (byte fallback " + (byteFallbackAvailable ? "available" : "unavailable") + ")");
         } catch (Exception e) {
-            Log.e(TAG, "Failed to load SentencePiece model: " + vocabFile, e);
+            Log.e(TAG, "Failed to load SentencePiece model: " + vocabFile
+                    + " (asset=" + assetName + ")", e);
         }
+    }
+
+    /** Returns {@code true} if the model was loaded successfully. */
+    public boolean isLoaded() {
+        return loaded;
     }
 
     // ---------------------------------------------------------------------
     // Model loading: minimal protobuf reader for sentencepiece's ModelProto
     // ---------------------------------------------------------------------
 
-    private void loadModel(String vocabFile) throws IOException {
-        byte[] data = Files.readAllBytes(Paths.get(vocabFile));
+    private void loadModel(Context context, String vocabFile, String assetName) throws IOException {
+        byte[] data = readModelBytes(context, vocabFile, assetName);
 
         List<String> pieces = new ArrayList<>();
         List<Float> scores = new ArrayList<>();
@@ -174,6 +191,46 @@ public class Tokenizer {
             }
         }
         byteFallbackAvailable = allBytesPresent;
+    }
+
+    /**
+     * Read the raw bytes of the SentencePiece model, trying the filesystem
+     * first and falling back to the Android AssetManager.
+     */
+    private byte[] readModelBytes(Context context, String vocabFile, String assetName) throws IOException {
+        // 1. Try the file-system path (the copy that TranslationModule creates)
+        File file = new File(vocabFile);
+        if (file.exists() && file.length() > 0) {
+            Log.d(TAG, "Reading SP model from filesystem: " + vocabFile
+                    + " (" + (file.length() / 1024) + " KB)");
+            return readAllBytes(new FileInputStream(file));
+        }
+        Log.w(TAG, "SP model not found on filesystem (" + vocabFile
+                + "), falling back to AssetManager (" + assetName + ")");
+
+        // 2. Fall back to reading directly from the APK's assets
+        if (context != null && assetName != null) {
+            try (InputStream in = context.getAssets().open(assetName)) {
+                Log.d(TAG, "Reading SP model from assets: " + assetName);
+                return readAllBytes(in);
+            }
+        }
+
+        throw new IOException("SentencePiece model not found at " + vocabFile
+                + " and AssetManager fallback unavailable (asset=" + assetName + ")");
+    }
+
+    /** Read an entire InputStream into a byte[]. */
+    private static byte[] readAllBytes(InputStream in) throws IOException {
+        try (InputStream is = in) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(1024 * 1024); // 1 MB initial
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) != -1) {
+                bos.write(buf, 0, n);
+            }
+            return bos.toByteArray();
+        }
     }
 
     /** Tiny sequential protobuf wire-format reader (decode-only, no dependency). */

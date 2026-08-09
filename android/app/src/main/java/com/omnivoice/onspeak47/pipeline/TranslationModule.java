@@ -37,6 +37,7 @@ public class TranslationModule {
     private final OrtSession encoderSession;
     private final OrtSession decoderSession;
     private final Tokenizer tokenizer;
+    private final Context context;
 
     private static final Map<String, String> NLLB_CODES = new HashMap<>();
     static {
@@ -46,6 +47,7 @@ public class TranslationModule {
     }
 
     public TranslationModule(Context context) throws OrtException {
+        this.context = context;
         env = OrtEnvironment.getEnvironment();
 
         // Use External Files Dir to avoid C: drive issues
@@ -78,7 +80,11 @@ public class TranslationModule {
         encoderSession = env.createSession(encoderPath, options);
         decoderSession = env.createSession(decoderPath, options);
 
-        tokenizer = new Tokenizer(vocabPath, Tokenizer.NLLB);
+        tokenizer = new Tokenizer(context, vocabPath, VOCAB_FILE, Tokenizer.NLLB);
+        if (!tokenizer.isLoaded()) {
+            Log.e(TAG, "⚠ Tokenizer failed to load — all translations will fail! "
+                    + "Make sure '" + VOCAB_FILE + "' is in android/app/src/main/assets/");
+        }
         options.close();
     }
 
@@ -108,7 +114,10 @@ public class TranslationModule {
         OrtSession.Result encoderResult = null;
         try {
             Tokenizer.TokenizerResult input = tokenizer.tokenize(nllbSrc, nllbTgt, text);
-            if (input == null) return "[error: tokenization failed]";
+            if (input == null) {
+                Log.e(TAG, "Tokenization returned null — tokenizer.isLoaded()=" + tokenizer.isLoaded());
+                return "[error: tokenization failed]";
+            }
 
             OnnxTensor inputIds = TensorUtils.intArrayToTensor(env, input.inputIDs);
             OnnxTensor mask = TensorUtils.intArrayToTensor(env, input.attentionMask);
