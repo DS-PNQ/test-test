@@ -37,7 +37,6 @@ public class TranslationModule {
     private final OrtSession encoderSession;
     private final OrtSession decoderSession;
     private final Tokenizer tokenizer;
-    private final Context context;
 
     private static final Map<String, String> NLLB_CODES = new HashMap<>();
     static {
@@ -47,7 +46,6 @@ public class TranslationModule {
     }
 
     public TranslationModule(Context context) throws OrtException {
-        this.context = context;
         env = OrtEnvironment.getEnvironment();
 
         // Use External Files Dir to avoid C: drive issues
@@ -69,22 +67,13 @@ public class TranslationModule {
         
         options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
 
-        // Try to use NNAPI for hardware acceleration (NPU/GPU/DSP)
-        try {
-            options.addNnapi();
-            Log.i(TAG, "NNAPI execution provider enabled");
-        } catch (OrtException e) {
-            Log.w(TAG, "NNAPI not available, using CPU fallback", e);
-        }
+        // Use CPU provider for INT8 model stability on Android
+        Log.i(TAG, "Using CPU execution provider");
 
         encoderSession = env.createSession(encoderPath, options);
         decoderSession = env.createSession(decoderPath, options);
 
-        tokenizer = new Tokenizer(context, vocabPath, VOCAB_FILE, Tokenizer.NLLB);
-        if (!tokenizer.isLoaded()) {
-            Log.e(TAG, "⚠ Tokenizer failed to load — all translations will fail! "
-                    + "Make sure '" + VOCAB_FILE + "' is in android/app/src/main/assets/");
-        }
+        tokenizer = new Tokenizer(vocabPath, Tokenizer.NLLB);
         options.close();
     }
 
@@ -114,10 +103,7 @@ public class TranslationModule {
         OrtSession.Result encoderResult = null;
         try {
             Tokenizer.TokenizerResult input = tokenizer.tokenize(nllbSrc, nllbTgt, text);
-            if (input == null) {
-                Log.e(TAG, "Tokenization returned null — tokenizer.isLoaded()=" + tokenizer.isLoaded());
-                return "[error: tokenization failed]";
-            }
+            if (input == null) return "[error: tokenization failed]";
 
             OnnxTensor inputIds = TensorUtils.intArrayToTensor(env, input.inputIDs);
             OnnxTensor mask = TensorUtils.intArrayToTensor(env, input.attentionMask);
@@ -140,8 +126,8 @@ public class TranslationModule {
 
             mask.close();
             return translation;
-        } catch (OrtException e) {
-            Log.e(TAG, "Dịch lỗi", e);
+        } catch (Exception e) {
+            Log.e(TAG, "Translation error: " + e.getMessage(), e);
             return "[error]";
         } finally {
             if (encoderResult != null) encoderResult.close();
@@ -202,7 +188,7 @@ public class TranslationModule {
                     for (Map.Entry<String, OnnxValue> entry : stepResult) {
                         if (entry.getKey().startsWith("present")) {
                             String pastName = entry.getKey().replace("present", "past_key_values");
-                            nextPastKeyValues.put(pastName, (OnnxTensor) entry.getValue());
+                            nextPastKeyValues.put(pastName, TensorUtils.cloneTensor(env, (OnnxTensor) entry.getValue()));
                         }
                     }
 
