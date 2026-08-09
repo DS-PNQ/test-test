@@ -187,10 +187,11 @@ class NLLBTranslator:
         # Remove spaces between CJK characters while preserving spaces
         # around Latin/ASCII words.
         import re
-        # Remove spaces between two CJK characters
+        # Remove spaces between two CJK characters using lookbehind/lookahead
+        # to avoid consuming the characters themselves (handling multiple spaces).
         text = re.sub(
-            r"([\u4e00-\u9fff\u3400-\u4dbf])\s+([\u4e00-\u9fff\u3400-\u4dbf])",
-            r"\1\2",
+            r"(?<=[\u4e00-\u9fff\u3400-\u4dbf])\s+(?=[\u4e00-\u9fff\u3400-\u4dbf])",
+            "",
             text,
         )
         return text.strip()

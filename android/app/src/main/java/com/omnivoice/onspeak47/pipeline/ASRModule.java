@@ -55,16 +55,56 @@ public class ASRModule {
     private static final int TRANSCRIBE = 50359; 
     private static final int NO_TIMESTAMPS = 50363;
 
-    // Language tokens
+    // Language tokens (verified against whisper_vocab.json)
     private static final Map<String, Integer> LANGUAGE_TOKENS = new HashMap<>();
     static {
-        LANGUAGE_TOKENS.put("vi", 50264);
-        LANGUAGE_TOKENS.put("en", 50259);
-        LANGUAGE_TOKENS.put("zh", 50260);
+        LANGUAGE_TOKENS.put("vi", 50278);  // <|vi|> — was incorrectly 50264 (<|ko|>)
+        LANGUAGE_TOKENS.put("en", 50259);  // <|en|>
+        LANGUAGE_TOKENS.put("zh", 50260);  // <|zh|>
     }
 
     private static final String WHISPER_VOCAB_FILE = "whisper_vocab.json";
     private Map<Integer, String> vocabMap;
+
+    // ------------------------------------------------------------------
+    // GPT-2 / Whisper byte-level BPE alphabet (bytes_to_unicode()).
+    //
+    // Whisper's vocab.json does NOT contain literal UTF-8 text. Each raw
+    // byte (0-255) is remapped to one printable Unicode "placeholder"
+    // character so that byte-level BPE merges can operate on any input
+    // byte using ordinary text tooling. e.g. the Vietnamese/Chinese bytes
+    // of a multi-byte UTF-8 character each get their own placeholder char
+    // (space -> 'Ġ', and CJK bytes -> characters like 'ãĢĤ' for "。").
+    //
+    // Decoding therefore requires: for every character in a decoded token
+    // string, map it back to its original byte via this reverse table,
+    // concatenate ALL bytes across the whole output, and only then decode
+    // the byte sequence as UTF-8 — never per-token, since a single UTF-8
+    // character's bytes can be split across adjacent tokens.
+    // ------------------------------------------------------------------
+    private static final Map<Integer, Character> BYTE_TO_UNICODE = new HashMap<>();
+    private static final Map<Character, Integer> UNICODE_TO_BYTE = new HashMap<>();
+    static {
+        boolean[] inBaseSet = new boolean[256];
+        ArrayList<Integer> bytesList = new ArrayList<>();
+        for (int b = '!'; b <= '~'; b++) { bytesList.add(b); inBaseSet[b] = true; }
+        for (int b = 0xA1; b <= 0xAC; b++) { bytesList.add(b); inBaseSet[b] = true; }
+        for (int b = 0xAE; b <= 0xFF; b++) { bytesList.add(b); inBaseSet[b] = true; }
+        ArrayList<Integer> codepointsList = new ArrayList<>(bytesList);
+        int n = 0;
+        for (int b = 0; b < 256; b++) {
+            if (!inBaseSet[b]) {
+                bytesList.add(b);
+                codepointsList.add(256 + n);
+                n++;
+            }
+        }
+        for (int i = 0; i < bytesList.size(); i++) {
+            char c = (char) (int) codepointsList.get(i);
+            BYTE_TO_UNICODE.put(bytesList.get(i), c);
+            UNICODE_TO_BYTE.put(c, bytesList.get(i));
+        }
+    }
 
     public ASRModule(Context context) throws OrtException {
         env = OrtEnvironment.getEnvironment();
@@ -220,14 +260,15 @@ public class ASRModule {
                     try (OrtSession.Result result = decoderSession.run(inputs)) {
                         float[][][] logits = (float[][][]) result.get(0).getValue();
                         int nextToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
-                        if (nextToken == EOT) { inputIds.close(); break; }
+                        if (nextToken == EOT) break;
                         outputTokens.add(nextToken);
                         long[] nextTokens = new long[currentTokens.length + 1];
                         System.arraycopy(currentTokens, 0, nextTokens, 0, currentTokens.length);
                         nextTokens[currentTokens.length] = nextToken;
                         currentTokens = nextTokens;
+                    } finally {
+                        inputIds.close();
                     }
-                    inputIds.close();
                 }
             }
         } catch (Exception e) {
@@ -251,7 +292,10 @@ public class ASRModule {
                     while (reader.hasNext()) {
                         String key = reader.nextName();
                         int id = reader.nextInt();
-                        vocabMap.put(id, key.replace("Ġ", " "));
+                        // Store the raw byte-level-BPE token string as-is;
+                        // decodeTokens() reverses the byte mapping and
+                        // re-decodes as UTF-8 (see BYTE_TO_UNICODE above).
+                        vocabMap.put(id, key);
                     }
                     reader.endObject();
                 }
@@ -266,16 +310,36 @@ public class ASRModule {
 
     private String decodeTokens(ArrayList<Integer> tokenIds) {
         if (tokenIds.isEmpty()) return "";
-        if (vocabMap != null && !vocabMap.isEmpty()) {
-            StringBuilder sb = new StringBuilder();
-            for (int id : tokenIds) {
-                if (id >= 50257) continue;
-                String piece = vocabMap.get(id);
-                if (piece != null) sb.append(piece);
+        if (vocabMap == null || vocabMap.isEmpty()) return "[No vocab]";
+
+        // Reassemble the raw byte sequence first: every character in every
+        // token is a byte-level-BPE placeholder that maps back to exactly
+        // one byte via UNICODE_TO_BYTE. A single UTF-8 character's bytes
+        // may be split across adjacent tokens, so we must concatenate all
+        // bytes and decode as UTF-8 only at the very end.
+        byte[] bytes = new byte[tokenIds.size() * 16];
+        int len = 0;
+        for (int id : tokenIds) {
+            if (id >= 50257) continue;  // skip special tokens
+            String piece = vocabMap.get(id);
+            if (piece == null) continue;
+            for (int i = 0; i < piece.length(); i++) {
+                Integer b = UNICODE_TO_BYTE.get(piece.charAt(i));
+                if (b == null) continue;  // unexpected character, skip
+                if (len == bytes.length) {
+                    byte[] grown = new byte[bytes.length * 2];
+                    System.arraycopy(bytes, 0, grown, 0, len);
+                    bytes = grown;
+                }
+                bytes[len++] = (byte) (int) b;
             }
-            return sb.toString().trim();
         }
-        return "[No vocab]";
+
+        try {
+            return new String(bytes, 0, len, "UTF-8").trim();
+        } catch (java.io.UnsupportedEncodingException e) {
+            return "";
+        }
     }
 
     private float[][] extractMelFeatures(String audioPath) {
@@ -293,7 +357,7 @@ public class ASRModule {
             audioSamples = padded;
         }
 
-        int numFrames = (audioSamples.length - WINDOW_SIZE) / HOP_LENGTH + 1;
+        int numFrames = audioSamples.length / HOP_LENGTH;
         if (numFrames > MAX_AUDIO_FRAMES) numFrames = MAX_AUDIO_FRAMES;
 
         float[][] stftMag = new float[N_FFT / 2 + 1][numFrames];
@@ -326,12 +390,15 @@ public class ASRModule {
             for (int f = 0; f < numFrames; f++) if (melSpec[m][f] > maxVal) maxVal = melSpec[m][f];
         }
 
+        // Whisper normalization: log-mel is clamped to [max-8, max], then
+        // normalized as (val + 4.0) / 4.0  (the +4 accounts for the typical
+        // log-mel floor, matching the Whisper processor's fixed offset).
         float clampMin = maxVal - 8.0f;
         for (int m = 0; m < N_MELS; m++) {
             for (int f = 0; f < MAX_AUDIO_FRAMES; f++) {
                 float val = (f < numFrames) ? melSpec[m][f] : clampMin;
                 val = Math.max(val, clampMin);
-                melSpec[m][f] = (val - clampMin) / 4.0f - 1.0f;
+                melSpec[m][f] = (val + 4.0f) / 4.0f;
             }
         }
         return melSpec;
@@ -345,12 +412,21 @@ public class ASRModule {
             int bitsPerSample = ByteBuffer.wrap(header, 34, 2).order(ByteOrder.LITTLE_ENDIAN).getShort();
             int numChannels = ByteBuffer.wrap(header, 22, 2).order(ByteOrder.LITTLE_ENDIAN).getShort();
             int dataSize = (int) (new File(wavPath).length() - 44);
+            if (dataSize <= 0) return null;
+
             byte[] audioBytes = new byte[dataSize];
-            fis.read(audioBytes);
+            int totalRead = 0;
+            while (totalRead < dataSize) {
+                int n = fis.read(audioBytes, totalRead, dataSize - totalRead);
+                if (n < 0) break;
+                totalRead += n;
+            }
+            if (totalRead <= 0) return null;
+
             int bytesPerSample = bitsPerSample / 8;
-            int numSamples = audioBytes.length / (bytesPerSample * numChannels);
+            int numSamples = totalRead / (bytesPerSample * numChannels);
             float[] samples = new float[numSamples];
-            ByteBuffer buffer = ByteBuffer.wrap(audioBytes).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer buffer = ByteBuffer.wrap(audioBytes, 0, totalRead).order(ByteOrder.LITTLE_ENDIAN);
             for (int i = 0; i < numSamples; i++) {
                 if (bitsPerSample == 16) {
                     samples[i] = buffer.getShort() / 32768.0f;

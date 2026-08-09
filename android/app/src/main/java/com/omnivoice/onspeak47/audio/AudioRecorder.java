@@ -38,10 +38,14 @@ public class AudioRecorder {
     private int bufferSize;
 
     public AudioRecorder() {
-        bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
-        if (bufferSize < 0) {
-            bufferSize = SAMPLE_RATE * 2;  // 1 second of 16-bit audio
+        int minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
+        if (minBuffer < 0) {
+            minBuffer = SAMPLE_RATE * 2;  // 1 second of 16-bit audio
         }
+        // Use 2x the minimum buffer size for more reliable recording
+        // (the minimum is often too small and causes read() to return
+        //  partial data or ERROR_BAD_VALUE on some devices).
+        bufferSize = Math.max(minBuffer * 2, SAMPLE_RATE * 2);
     }
 
     /**
@@ -58,8 +62,17 @@ public class AudioRecorder {
         this.outputPath = outputPath;
 
         try {
+            // Use the standard microphone source. 
+            // NOTE: MediaRecorder.AudioSource.VOICE_RECOGNITION was previously
+            // used here, but that source is gated by the CAPTURE_VOICE_INTERACTION
+            // permission (signature|privileged, only granted to the system's
+            // active voice-interaction service). A normal app holding only
+            // RECORD_AUDIO silently fails to initialize with AudioRecord
+            // (STATE_UNINITIALIZED) or records empty/silent buffers, which is
+            // why the ASR pipeline "does not detect any audio input." MIC is the
+            // correct source for app-recorded audio.
             audioRecord = new AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    MediaRecorder.AudioSource.MIC,
                     SAMPLE_RATE,
                     CHANNEL_CONFIG,
                     AUDIO_FORMAT,
