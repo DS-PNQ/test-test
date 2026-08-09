@@ -64,10 +64,12 @@ dependencies {
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.22.0'
     implementation 'com.microsoft.onnxruntime:onnxruntime-extensions-android:0.13.0'
 
-
-    // SentencePiece for tokenization (DJL implementation)
-    implementation 'ai.djl.sentencepiece:sentencepiece:0.36.0'
-    implementation 'ai.djl:api:0.36.0'
+    // NOTE: ai.djl.sentencepiece:sentencepiece was removed here. It only ships
+    // native binaries for desktop/server JVMs (linux-x86_64, osx, win) — there
+    // is no ai.djl.android:sentencepiece-native artifact — so SpTokenizer's
+    // native lib never loads on-device. Tokenizer.java now parses the
+    // SentencePiece model and runs BPE in pure Java instead, so this
+    // dependency (and the plain ai.djl:api it dragged in) is no longer needed.
 
     // Tests
     testImplementation 'junit:junit:4.13.2'
