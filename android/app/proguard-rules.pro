@@ -3,5 +3,4 @@
 -keep class ai.onnxruntime.** { *; }
 -keep class com.microsoft.onnxruntime.** { *; }
 
-# Keep DJL SentencePiece tokenizer
--keep class ai.djl.sentencepiece.** { *; }
+# SentencePiece: uses pure-Java implementation (no JNI/native library)

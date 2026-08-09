@@ -112,6 +112,38 @@ def prune_vocab(
              f"({vocab_size_before - vocab_size_after} tokens removed)")
     log.info(f"  Embedding size: {shared_embed.shape} → {new_embed.shape}")
 
+    # ------------------------------------------------------------------
+    # Apply pruned embeddings to the model
+    # ------------------------------------------------------------------
+    import torch.nn as nn
+
+    # Replace shared embedding
+    new_shared = nn.Embedding(vocab_size_after, embed_dim)
+    new_shared.weight.data = new_embed
+    model.model.shared = new_shared
+
+    # Encoder and decoder input embeddings point to shared
+    model.model.encoder.embed_tokens = new_shared
+    model.model.decoder.embed_tokens = new_shared
+
+    # Replace LM head (output projection)
+    old_lm_head = model.lm_head.weight.data  # [vocab_size, embed_dim]
+    new_lm_head_weight = old_lm_head[keep_ids].clone()
+    new_lm_head = nn.Linear(embed_dim, vocab_size_after, bias=False)
+    new_lm_head.weight.data = new_lm_head_weight
+    model.lm_head = new_lm_head
+
+    # Update config
+    model.config.vocab_size = vocab_size_after
+
+    log.info("  Replaced shared embedding, encoder/decoder embed_tokens, and lm_head")
+
+    # ------------------------------------------------------------------
+    # Save pruned model and tokenizer
+    # ------------------------------------------------------------------
+    model.save_pretrained(str(output_dir))
+    log.info(f"  Pruned model saved to {output_dir}")
+
     # Save pruning metadata
     pruning_meta = {
         "original_model": model_name,
@@ -123,6 +155,24 @@ def prune_vocab(
     }
     meta_path = output_dir / "pruning_metadata.json"
     meta_path.write_text(json.dumps(pruning_meta, indent=2), encoding="utf-8")
+
+    # ------------------------------------------------------------------
+    # Export language_token_map.json for Android Tokenizer
+    # ------------------------------------------------------------------
+    # The Android Tokenizer needs to know the NEW HF token IDs for each
+    # kept language after pruning (the old_to_new mapping shifts them).
+    lang_token_map = {}
+    for lang_code in sorted(keep_languages):
+        old_id = tokenizer.convert_tokens_to_ids(lang_code)
+        if old_id in old_to_new:
+            lang_token_map[lang_code] = old_to_new[old_id]
+            log.info(f"  {lang_code}: {old_id} → {old_to_new[old_id]}")
+        else:
+            log.warning(f"  {lang_code}: old ID {old_id} not found in kept IDs!")
+
+    lang_map_path = output_dir / "language_token_map.json"
+    lang_map_path.write_text(json.dumps(lang_token_map, indent=2), encoding="utf-8")
+    log.info(f"Language token map saved to {lang_map_path}")
 
     # Save the tokenizer with updated special tokens
     new_special_tokens = sorted(keep_lang_tokens) + list(SPECIAL_TOKENS)
