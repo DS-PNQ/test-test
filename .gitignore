@@ -6,6 +6,8 @@ onnx_models/
 *.bin
 *.pt
 *.pth
+*.safetensors
+android/app/src/main/assets/hf_cache/
 
 # Python
 .venv/
@@ -17,6 +19,7 @@ __pycache__/
 # Android
 android/.gradle/
 android/app/build/
+android/app/.cxx/
 android/build/
 android/local.properties
 android/.idea/
