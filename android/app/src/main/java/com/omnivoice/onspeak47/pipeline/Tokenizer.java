@@ -194,16 +194,25 @@ public class Tokenizer {
         }
     }
 
-    /** Populate langTokenIds using the standard unpruned formula. */
+    /**
+     * Populate langTokenIds with the exact HuggingFace language-token ids for
+     * the app's supported languages. Values verified against the real
+     * NLLB-200 distilled-600M vocab (HF tokenizer.json), where language ids
+     * begin right after the 256000 sentence-piece entries + 4 special tokens.
+     *
+     * Replaces the old `spVocabSize + 1 + index` formula, which was wrong
+     * twice: an off-by-one (+1) and a hardcoded LANGUAGES_NLLB list missing
+     * ~50 NLLB codes, so vie_Latn/zho_Hans computed to out-of-range ids
+     * (256206 > max 256205) that crashed the ONNX decoder embedding Gather
+     * and surfaced in the app as "[error]".
+     */
     private void buildDefaultLanguageTokenIds() {
         langTokenIds.clear();
-        for (int i = 0; i < LANGUAGES_NLLB.length; i++) {
-            // HF ID = SP_VOCAB_SIZE + 1 + language_index
-            langTokenIds.put(LANGUAGES_NLLB[i], spVocabSize + 1 + i);
-        }
-        Log.i(TAG, "Built default language token IDs (unpruned model, "
-                + LANGUAGES_NLLB.length + " languages, offset="
-                + (spVocabSize + 1) + ")");
+        langTokenIds.put("eng_Latn", 256047);
+        langTokenIds.put("vie_Latn", 256193);
+        langTokenIds.put("zho_Hans", 256200);
+        langTokenIds.put("zho_Hant", 256201);
+        Log.i(TAG, "Default language token IDs: " + langTokenIds);
     }
 
     // ------------------------------------------------------------------
@@ -289,16 +298,11 @@ public class Tokenizer {
         Integer id = langTokenIds.get(languageCode);
         if (id != null) return id;
 
+        // Unknown language: default to English. Never compute a formula-based
+        // id -- that produced out-of-range ids that crashed the decoder.
         Log.w(TAG, "Unknown NLLB language code: " + languageCode
-                + " — available: " + langTokenIds.keySet());
-
-        // Last-resort fallback: try the formula
-        for (int i = 0; i < LANGUAGES_NLLB.length; i++) {
-            if (LANGUAGES_NLLB[i].equals(languageCode)) {
-                return spVocabSize + 1 + i;
-            }
-        }
-        return spVocabSize + 1;  // first language as default
+                + " — defaulting to eng_Latn (256047)");
+        return 256047;
     }
 
     /**

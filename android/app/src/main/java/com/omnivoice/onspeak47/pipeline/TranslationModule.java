@@ -165,81 +165,84 @@ public class TranslationModule {
         }
     }
 
+    /**
+     * Greedy decode, matching HuggingFace's greedy_search contract for NLLB/M2M-100.
+     *
+     * Decoder prefix: [</s> (bos = id 2), <target_lang>]. The whole accumulated
+     * sequence is re-fed each step with use_cache_branch=false and empty past, so
+     * the model always sees the full context. This is the simplest correct scheme:
+     * verified on desktop it yields e.g. "It was a good game today." instead of the
+     * single-token-degenerate output from the previous per-step KV-cache loop (which
+     * seeded only the lang token and corrupted/reset the cross-attention cache).
+     */
     private ArrayList<Integer> greedyDecode(OnnxTensor encoderOutput, OnnxTensor mask, String nllbTgt) throws OrtException {
+        final int eosId = tokenizer.pieceToId("</s>");   // NLLB eos == bos == 2
+        final int targetLangId = tokenizer.getLanguageID(nllbTgt);
+
+        // Growable decoder input sequence, starting with [bos, target_lang].
+        ArrayList<Integer> decoderSeq = new ArrayList<>();
+        decoderSeq.add(eosId);
+        decoderSeq.add(targetLangId);
+
+        // Names and fixed (empty) shapes for the optional KV-cache inputs.
+        boolean hasCacheBranch = false;
+        ArrayList<String> decoderPastNames = new ArrayList<>();
+        ArrayList<String> encoderPastNames = new ArrayList<>();
+        for (String inputName : decoderSession.getInputNames()) {
+            if (inputName.equals("use_cache_branch")) {
+                hasCacheBranch = true;
+            } else if (inputName.startsWith("past_key_values")) {
+                if (inputName.contains(".encoder.")) encoderPastNames.add(inputName);
+                else decoderPastNames.add(inputName);
+            }
+        }
+
         ArrayList<Integer> outputIds = new ArrayList<>();
-        int eosId = tokenizer.pieceToId("</s>");
-        int targetLangId = tokenizer.getLanguageID(nllbTgt);
-        int currentToken = targetLangId; 
-        outputIds.add(currentToken);
 
-        Map<String, OnnxTensor> pastKeyValues = new HashMap<>();
-        OrtSession.Result result = null;
-
-        try {
-            // Step 0: Initialize empty past key values for the first step
-            // Xenova NLLB-200 merged models usually have 12 layers, 16 heads, 64 head_dim
-            // Some models might also have a 'use_cache_branch' input.
-            boolean hasCacheBranch = false;
-            for (String inputName : decoderSession.getInputNames()) {
-                if (inputName.equals("use_cache_branch")) {
-                    hasCacheBranch = true;
-                } else if (inputName.startsWith("past_key_values")) {
-                    pastKeyValues.put(inputName, TensorUtils.createFloatTensor(env, new long[]{1, 16, 0, 64}));
-                }
+        for (int step = 0; step < MAX_OUTPUT_TOKENS; step++) {
+            // Build fresh empty past tensors each step (branch is off, but inputs must exist).
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            OnnxTensor inputSeq = TensorUtils.intArrayToTensor(env, toIntArray(decoderSeq));
+            inputs.put("input_ids", inputSeq);
+            inputs.put("encoder_hidden_states", encoderOutput);
+            inputs.put("encoder_attention_mask", mask);
+            if (hasCacheBranch) {
+                inputs.put("use_cache_branch", TensorUtils.booleanToTensor(env, false));
+            }
+            for (String n : decoderPastNames) {
+                inputs.put(n, TensorUtils.createFloatTensor(env, new long[]{1, 16, 0, 64}));
+            }
+            for (String n : encoderPastNames) {
+                inputs.put(n, TensorUtils.createFloatTensor(env, new long[]{1, 16, 0, 64}));
             }
 
-            for (int i = 0; i < MAX_OUTPUT_TOKENS; i++) {
-                Map<String, OnnxTensor> inputs = new HashMap<>();
-                OnnxTensor inputTokenTensor = TensorUtils.intArrayToTensor(env, new int[]{currentToken});
-                inputs.put("input_ids", inputTokenTensor);
-                inputs.put("encoder_hidden_states", encoderOutput);
-                inputs.put("encoder_attention_mask", mask);
-                inputs.putAll(pastKeyValues);
-                
-                if (hasCacheBranch) {
-                    inputs.put("use_cache_branch", TensorUtils.booleanToTensor(env, i > 0));
+            try (OrtSession.Result stepResult = decoderSession.run(inputs)) {
+                float[][][] logits = (float[][][]) stepResult.get("logits").get().getValue();
+                int next = TensorUtils.argmax(logits[0][logits[0].length - 1]);
+                if (next == eosId) {
+                    break;                       // done; EOS not appended to output
                 }
-
-                try (OrtSession.Result stepResult = decoderSession.run(inputs)) {
-                    inputTokenTensor.close();
-                    if (hasCacheBranch) {
-                        inputs.get("use_cache_branch").close();
+                outputIds.add(next);
+                decoderSeq.add(next);
+            } finally {
+                // Close every input tensor we created this step (not encoderOutput/mask,
+                // which are owned by the caller).
+                for (Map.Entry<String, OnnxTensor> e : inputs.entrySet()) {
+                    String k = e.getKey();
+                    if (!k.equals("encoder_hidden_states") && !k.equals("encoder_attention_mask")) {
+                        e.getValue().close();
                     }
-
-                    float[][][] logits = (float[][][]) stepResult.get("logits").get().getValue();
-                    // Pick the last token's logits
-                    currentToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
-                    outputIds.add(currentToken);
-
-                    if (currentToken == eosId) {
-                        break;
-                    }
-
-                    Map<String, OnnxTensor> nextPastKeyValues = new HashMap<>();
-                    for (Map.Entry<String, OnnxValue> entry : stepResult) {
-                        if (entry.getKey().startsWith("present")) {
-                            String pastName = entry.getKey().replace("present", "past_key_values");
-                            nextPastKeyValues.put(pastName, (OnnxTensor) entry.getValue());
-                        }
-                    }
-
-                    // Close old past tensors
-                    for (OnnxTensor t : pastKeyValues.values()) {
-                        t.close();
-                    }
-
-                    pastKeyValues = nextPastKeyValues;
                 }
-            }
-
-        } finally {
-            if (result != null) result.close();
-            for (OnnxTensor t : pastKeyValues.values()) {
-                t.close();
             }
         }
 
         return outputIds;
+    }
+
+    private static int[] toIntArray(ArrayList<Integer> list) {
+        int[] arr = new int[list.size()];
+        for (int i = 0; i < list.size(); i++) arr[i] = list.get(i);
+        return arr;
     }
 
     private ArrayList<String> splitIntoSentences(String text, String langCode) {

@@ -36,8 +36,7 @@ public final class TensorUtils {
 
     public static OnnxTensor booleanToTensor(OrtEnvironment env, boolean value)
             throws OrtException {
-        byte[] data = new byte[]{(byte) (value ? 1 : 0)};
-        return OnnxTensor.createTensor(env, java.nio.ByteBuffer.wrap(data), new long[]{1});
+        return OnnxTensor.createTensor(env, new boolean[]{value});
     }
 
     /**
