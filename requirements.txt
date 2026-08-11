@@ -7,7 +7,7 @@ transformers>=4.42
 sentencepiece>=0.1.99   # required by NLLB-200 tokenizer
 protobuf>=3.20          # needed for some slow-tokenizer conversions (sentencepiece path)
 accelerate>=0.30        # smoother device_map / low-mem model loading in transformers
-soundfile>=0.12         # read/write WAV for ASR input and TTS output
+soundfile>=0.12         # audio-file decode backend used by librosa.load (ASR input)
 librosa>=0.10           # resample arbitrary input audio to Whisper's required 16kHz
 scipy>=1.11             # writing MMS-TTS waveform output to disk
 numpy>=1.26
@@ -15,9 +15,13 @@ jiwer>=3.0               # WER/CER scoring for ASR accuracy tests
 sacrebleu>=2.4           # BLEU scoring for translation quality tests
 pytest>=8.0              # test runner for tests_local/
 
-# --- Phase 2 ONNX export / Qualcomm AI Hub (optimize/) — not needed for local tests ---
-# Uncomment when starting the ONNX conversion / QAH submission scripts.
+# --- ONNX export / Qualcomm AI Hub (optimize/) — only needed for the export/quantize scripts ---
 optimum>=1.20
 onnx>=1.16
 onnxruntime>=1.18
-qai-hub                # Qualcomm AI Hub SDK (requires API token)
+onnxruntime-extensions>=0.13  # tokenizer graph emission in 01_export_onnx.py
+qai-hub                      # Qualcomm AI Hub SDK (requires API token)
+
+# --- Linux-only optionals ---
+# aimet-torch            # only for `03_quantize_aimet.py --method aimet*`
+#                         # (imported lazily; the default `onnx_int8` path works without it)
