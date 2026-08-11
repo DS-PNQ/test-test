@@ -126,9 +126,14 @@ python optimize/export_mms_tts.py --verify
 
 The Android app is in `android/`. To build:
 
-1. Copy ONNX model files to `android/app/src/main/assets/`
-2. Open in Android Studio
-3. Build → Make Project (or `gradlew assembleDebug`)
+1. Copy ONNX model files to `android/app/src/main/assets/` (see "Required assets")
+2. Open the `android/` folder in **Android Studio** — the project uses **Gradle 9.5**
+   and requires **JDK 17+** (Android Studio bundles a compatible JDK; there is no
+   `gradlew` wrapper committed, so run `gradle assembleDebug` from `android/`
+   when building on the command line)
+3. Build → Make Project (or press Run ▶ on a connected device / emulator)
+
+> The APK is built for **arm64-v8a only** (`abiFilters 'arm64-v8a'` in `app/build.gradle`).
 
 Required assets:
 - `encoder_model_int8.onnx` (NLLB encoder)
@@ -139,10 +144,35 @@ Required assets:
 - `whisper_preprocess.onnx` / `whisper_postprocess.onnx` / `whisper_vocab.json`
 - `mms_tts_vi.onnx` + `mms_tts_vi_vocab.json` (MMS-TTS Vietnamese)
 - `mms_tts_en.onnx` + `mms_tts_en_vocab.json` (MMS-TTS English)
-- `mms_tts_zh.onnx` + `mms_tts_zh_vocab.json` (MMS-TTS Chinese)
 
-> The `mms_tts_*` files are optional — if not bundled, TTSModule falls back
-> to the Android system TextToSpeech engine for that language.
+> There is **no `mms_tts_zh` MMS-TTS asset** — Meta never released an MMS-TTS
+> Mandarin checkpoint (only Hakka `mms-tts-hak` and Min-Nan `mms-tts-nan`), so
+> Chinese TTS uses the device's Android **system** TextToSpeech engine.
+>
+> The system fallback in `TTSModule` is fully automatic:
+> - The engine is created on the main thread and binds **explicitly** to the
+>   best available engine — preferring `com.google.android.tts` (Google TTS),
+>   otherwise the first installed engine that declares a TTS service — so it no
+>   longer depends on the device's "default engine" setting.
+> - On the first failed Chinese synthesis it **auto-opens the system
+>   voice-data installer** (`ACTION_INSTALL_TTS_DATA`) so the user can download
+>   the Mandarin (普通话) voice, and it surfaces an actionable reason through
+>   `getLastError()` / the TTS Toast (missing voice data, no default engine, or
+>   no TTS engine installed at all).
+>
+> Requirements for Chinese speech output:
+> - An Android TTS engine with **Chinese voice data installed** (usually
+>   Google TTS → Settings → Text-to-speech → Install voice data → 普通话).
+> - On emulators, use a **Google APIs / Play Store** AVD image — plain AOSP
+>   images ship **no** TTS engine at all.
+>
+> To add proper fully-offline Chinese TTS you'd integrate a Mandarin neural TTS
+> that ships ONNX (e.g. a Sherpa-ONNX VITS `zh` model with its G2P front-end) —
+> see `docs/` for details.
+
+> The `mms_tts_*` files are optional — if a model isn't bundled, `TTSModule`
+> falls back to the Android system TextToSpeech engine for that language (which
+> is always the path used for Chinese).
 
 ## Architecture
 
@@ -150,3 +180,6 @@ Required assets:
 - **ONNX Runtime** for all model inference (same as RTranslator-2.00)
 - **Qualcomm AI Hub** as primary optimization path (not vendor-locked)
 - **Wearable-ready** — pipeline design allows hardware swap without redesign
+- **Two-backend TTS** — neural MMS-TTS (ONNX) for VN/EN when bundled, with the
+  Android system TextToSpeech engine as an automatic fallback (and the only
+  backend for Chinese)

@@ -29,8 +29,9 @@ ASSETS_DIR = Path(__file__).resolve().parent.parent / "android" / "app" / "src" 
 # MMS-TTS checkpoints keyed by simple language code.
 # Keep in sync with backend/tts_mms.py::MMS_TTS_MODELS.
 #
-# NOTE: Meta never released an MMS-TTS Mandarin checkpoint. The sibling Chinese
-# releases are Hakka (-hak) and Min-Nan (-nan), NOT Mandarin, so "zh" is
+# NOTE: Meta never released an MMS-TTS Mandarin checkpoint (verified against the
+# HF hub: facebook/mms-tts-cmn and facebook/mms-tts-zho both 404). The sibling
+# Chinese releases are Hakka (-hak) and Min-Nan (-nan), NOT Mandarin, so "zh" is
 # intentionally NOT mapped here. TTSModule.java falls back to the Android system
 # TTS engine for languages without a bundled ONNX model (i.e. zh). If a
 # MMS-compatible Mandarin VITS checkpoint becomes available, add it here and it

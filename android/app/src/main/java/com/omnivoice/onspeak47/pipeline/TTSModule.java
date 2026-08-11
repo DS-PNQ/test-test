@@ -9,7 +9,10 @@
 package com.omnivoice.onspeak47.pipeline;
 
 import android.content.Context;
+import android.content.Intent;
+import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
@@ -66,8 +69,62 @@ public class TTSModule {
     private final Context context;
 
     // ---- Android system TTS (fallback) --------------------------------
-    private TextToSpeech androidTTS;
+    /**
+     * The TextToSpeech object is created on the main thread — the setup every
+     * stock TTS engine (Google, Samsung, Pico, iFlytek …) is developed and
+     * tested against, and the most reliable across OEM ROMs. Creating it on a
+     * worker/HandlerThread or on a Looper-less thread delays or even misses
+     * the onInit callback on some engines. Nothing ever blocks the main thread
+     * though: only worker threads wait on the latch.
+     */
+    private final Handler ttsMainHandler = new Handler(Looper.getMainLooper());
+
+    /** Written on the main thread, read on pipeline threads. */
+    private volatile TextToSpeech androidTTS;
     private volatile boolean systemTtsReady = false;
+    /**
+     * Most recent {@link TextToSpeech.OnInitListener} result:
+     * {@link TextToSpeech#SUCCESS}, {@link TextToSpeech#ERROR} — or
+     * {@link #SYSTEM_TTS_PENDING} while a bind is still in flight.
+     * {@code TextToSpeech.ERROR == -1}, so "pending" must use a distinct
+     * sentinel value: conflating them used to hide a real engine ERROR behind
+     * a bogus "did not finish binding" message (and skipped the retry).
+     */
+    private volatile int systemTtsInitStatus = SYSTEM_TTS_PENDING;
+    /**
+     * Latch that the current {@link TextToSpeech.OnInitListener} counts down
+     * exactly once (success or failure). Swapped on each (re)bind by
+     * {@link #initSystemTts()} / the rebind branch of
+     * {@link #awaitSystemTtsReady(long)}.
+     */
+    private volatile CountDownLatch systemTtsInitLatch = new CountDownLatch(1);
+    /** Guards TTS (re)bind and instance swap. */
+    private final Object ttsBindLock = new Object();
+    /** Whether the single allowed lazy rebind has already been attempted. */
+    private boolean rebindAttempted = false;
+    private volatile boolean ttsReleased = false;
+
+    /**
+     * TTS engine package we explicitly bind to (resolved once by
+     * {@link #chooseEnginePackage}). The framework's "default engine" setting
+     * is empty on many phones even when Google TTS is installed — that is the
+     * root cause of the "engine null / not ready" failure, so we drive the
+     * engine selection ourselves.
+     */
+    private volatile String requestedEnginePackage = null;
+    /** One-shot flag: only auto-open the voice-data installer once per process. */
+    private boolean ttsHelpOffered = false;
+
+    /** Sentinel meaning "TextToSpeech bind still in flight" (ERROR == -1). */
+    private static final int SYSTEM_TTS_PENDING = Integer.MIN_VALUE;
+
+    /**
+     * How long a caller waits for the system TTS engine to finish binding.
+     * Generous on purpose: the engine can legitimately take a few seconds at
+     * cold start, and we never destroy an in-flight bind (see
+     * {@link #awaitSystemTtsReady(long)}).
+     */
+    private static final long SYSTEM_TTS_INIT_TIMEOUT_MS = 10_000L;
 
     /** Human-readable reason for the most recent synthesis failure (surfaced in the UI). */
     private volatile String lastError = null;
@@ -155,9 +212,11 @@ public class TTSModule {
      * Uses system TTS directly for instant feedback.
      */
     public void speak(String text, String language) {
-        if (!systemTtsReady || androidTTS == null) return;
-        Locale locale = LOCALES.getOrDefault(normalizeLang(language), Locale.ENGLISH);
-        androidTTS.setLanguage(locale);
+        ensureSystemTtsStarted();
+        if (!awaitSystemTtsReady(SYSTEM_TTS_INIT_TIMEOUT_MS)) return; // lastError set
+        if (androidTTS == null) return;
+        Locale locale = resolveSystemLocale(normalizeLang(language));
+        if (locale == null) return; // lastError set; nothing speakable installed
         androidTTS.speak(text, TextToSpeech.QUEUE_FLUSH, null, "omnivoice_speak");
     }
 
@@ -170,10 +229,13 @@ public class TTSModule {
      * Release TTS resources.
      */
     public void release() {
-        if (androidTTS != null) {
-            androidTTS.stop();
-            androidTTS.shutdown();
-            androidTTS = null;
+        synchronized (ttsBindLock) {
+            ttsReleased = true;
+            if (androidTTS != null) {
+                try { androidTTS.stop(); } catch (Exception ignored) {}
+                try { androidTTS.shutdown(); } catch (Exception ignored) {}
+                androidTTS = null;
+            }
         }
         for (OrtSession s : ortSessions.values()) {
             try { s.close(); } catch (Exception ignored) {}
@@ -187,30 +249,340 @@ public class TTSModule {
     // System TTS (fallback backend)
     // ------------------------------------------------------------------
 
+    /**
+     * (Re)start the Android system TTS engine bind.
+     *
+     * The engine is created on the main thread (see {@link #ttsMainHandler}),
+     * which is the canonical, most OEM-compatible setup. Fire-and-forget:
+     * nobody blocks in here; the listener records the reported status and
+     * counts down the latch so {@link #awaitSystemTtsReady(long)} can wait for
+     * the outcome of *this* bind from a worker thread.
+     */
     private void initSystemTts() {
-        CountDownLatch latch = new CountDownLatch(1);
-        androidTTS = new TextToSpeech(context.getApplicationContext(), status -> {
-            systemTtsReady = (status == TextToSpeech.SUCCESS);
-            Log.i(TAG, systemTtsReady ? "Android system TTS initialized"
-                                      : "Android system TTS init failed");
+        synchronized (ttsBindLock) {
+            if (ttsReleased) return;
+            systemTtsInitStatus = SYSTEM_TTS_PENDING;
+            systemTtsReady = false;
+            systemTtsInitLatch = new CountDownLatch(1);
+            final CountDownLatch latch = systemTtsInitLatch;
+            ttsMainHandler.post(() -> createSystemTts(latch));
+        }
+    }
+
+    /** Lazily start TTS init if no bind is currently in flight. */
+    private void ensureSystemTtsStarted() {
+        synchronized (ttsBindLock) {
+            if (androidTTS == null && systemTtsInitLatch.getCount() == 0) {
+                initSystemTts();
+            }
+        }
+    }
+
+    /**
+     * Construct the {@link TextToSpeech} instance (on the main thread)
+     * and register an onInit that records the engine's reported status and
+     * counts down {@code latch}. A fresh latch is passed on every rebind so
+     * callers of {@link #awaitSystemTtsReady(long)} observe *this* bind's
+     * outcome. The instance is only kept if no other instance was bound in the
+     * meantime and the module hasn't been released.
+     */
+    private void createSystemTts(final CountDownLatch latch) {
+        String engine = requestedEnginePackage;
+        if (engine == null) {
+            engine = chooseEnginePackage(context);
+            requestedEnginePackage = engine;
+            Log.i(TAG, "System TTS: explicit engine="
+                    + (engine != null ? engine : "none — falling back to framework default"));
+        }
+        final TextToSpeech[] instanceHolder = new TextToSpeech[1];
+        TextToSpeech.OnInitListener onInit = status -> {
+            TextToSpeech instance = instanceHolder[0];
+            // onInit can fire INLINE during the constructor (before
+            // instanceHolder[0] is populated) when the engine fails to
+            // bind immediately — then instance is null and androidTTS is
+            // still null too, so null == null records the ERROR correctly.
+            // A callback from a *stale* instance (already replaced by a
+            // rebind) must NOT clobber the new bind's state.
+            if (androidTTS == instance) {
+                systemTtsInitStatus = status;
+                if (status == TextToSpeech.SUCCESS) {
+                    systemTtsReady = true;
+                    // Log which engine handled it — Chinese support is highly
+                    // engine-dependent (Google TTS vs Samsung vs Pico), and this
+                    // is the first thing to check when zh synthesis is silent.
+                    Log.i(TAG, "Android system TTS initialized, engine="
+                            + safeEngineName());
+                } else {
+                    systemTtsReady = false;
+                    Log.e(TAG, "Android system TTS init failed, status=" + status);
+                }
+            } else if (instance != null) {
+                Log.w(TAG, "Ignoring onInit from a discarded system TTS instance");
+            }
             latch.countDown();
-        });
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            try { latch.await(10, TimeUnit.SECONDS); }
-            catch (InterruptedException e) { Log.e(TAG, "TTS init interrupted", e); }
+        };
+        try {
+            instanceHolder[0] = (engine != null)
+                    ? new TextToSpeech(context.getApplicationContext(), onInit, engine)
+                    : new TextToSpeech(context.getApplicationContext(), onInit);
+        } catch (Throwable t) {
+            // Never let a TextToSpeech construction failure kill the setup or
+            // leave the latch un-counted — report it as a hard init error so
+            // awaitSystemTtsReady() can retry once and give an accurate reason.
+            Log.e(TAG, "TextToSpeech constructor failed (engine=" + engine + ")", t);
+            systemTtsInitStatus = TextToSpeech.ERROR;
+            systemTtsReady = false;
+            latch.countDown();
+            return;
+        }
+        TextToSpeech instance = instanceHolder[0];
+        synchronized (ttsBindLock) {
+            if (ttsReleased || androidTTS != null) {
+                // Don't leak an instance created after release(), or a second
+                // instance racing an existing bind — shut the extra one down.
+                try { instance.shutdown(); } catch (Exception ignored) {}
+            } else {
+                androidTTS = instance;
+            }
+        }
+    }
+
+    /**
+     * Wait (on the calling thread) until the system TTS engine reports ready
+     * or {@code timeoutMs} elapses.
+     *
+     * <p>Deliberately waits ONCE without touching the instance. Destroying and
+     * recreating a TextToSpeech whose bind has merely been slow — which the
+     * old code did on every timeout — restarted the whole bind dance, so a
+     * slowly-connecting engine never got a chance and every zh call failed
+     * with the persistent "System TTS engine not ready" error. Only an
+     * explicit hard error from {@code onInit} triggers the single allowed
+     * rebind (some OEM engines fail the first transient bind and succeed on
+     * retry). Nothing here ever blocks the engine's own callback thread.
+     *
+     * @return true if {@code onInit} reported SUCCESS in time, false otherwise
+     */
+    private boolean awaitSystemTtsReady(long timeoutMs) {
+        if (systemTtsReady && androidTTS != null) return true;
+
+        long deadline = SystemClock.uptimeMillis() + timeoutMs;
+        CountDownLatch pending = systemTtsInitLatch;
+
+        // Wait once, and only once, for the async bind. The engine can
+        // legitimately need several seconds at cold start — especially on a
+        // low-end device or right after the three heavy ONNX models finish
+        // loading in parallel and the CPU is still saturated.
+        waitForLatch(pending, deadline);
+
+        if (systemTtsReady && androidTTS != null) return true;
+
+        boolean reportedError = systemTtsInitStatus != SYSTEM_TTS_PENDING
+                && systemTtsInitStatus != TextToSpeech.SUCCESS;
+
+        if (reportedError) {
+            CountDownLatch rebound = maybeRebind();
+            if (rebound != null) {
+                waitForLatch(rebound, deadline + SYSTEM_TTS_INIT_TIMEOUT_MS);
+                if (systemTtsReady && androidTTS != null) return true;
+                // Rebinding also failed — fall through so the diagnostic below
+                // (the first bind's reported error) is always surfaced.
+                reportedError = true;
+            }
+        }
+
+        if (systemTtsReady && androidTTS != null) return true;
+
+        String hint;
+        if (!isAnyTtsEngineInstalled()) {
+            hint = " — no text-to-speech engine service is installed or enabled"
+                    + " on this device (install Google Speech Services / Google TTS)";
+        } else if (!hasDefaultTtsEngine()) {
+            hint = " — no default TTS engine is selected; app auto-selected "
+                    + (requestedEnginePackage != null ? requestedEnginePackage : "an engine")
+                    + " but it did not activate: open Settings → Text-to-speech →"
+                    + " select the engine, then download Chinese (普通话) voice data";
+        } else {
+            hint = " — the TTS engine did not activate; open Settings →"
+                    + " Text-to-speech to check voice data";
+        }
+        Log.e(TAG, "System TTS not ready: status=" + systemTtsInitStatus
+                + " defaultEngine="
+                + (androidTTS != null ? androidTTS.getDefaultEngine() : "n/a")
+                + " requested=" + requestedEnginePackage
+                + " installedEngines=[" + describeEngines() + "]");
+        lastError = "System TTS engine not ready (engine " + safeEngineName()
+                + (reportedError
+                    ? " reported init status " + systemTtsInitStatus
+                    : " did not finish binding within " + timeoutMs + "ms")
+                + hint + ")";
+        return false;
+    }
+
+    /**
+     * Perform the single allowed in-place rebind after a hard init error.
+     * Returns the fresh latch to wait on, or null when no rebind should or may
+     * happen (already attempted, released, or no init looper available).
+     */
+    private CountDownLatch maybeRebind() {
+        synchronized (ttsBindLock) {
+            if (ttsReleased || rebindAttempted) {
+                return null;
+            }
+            rebindAttempted = true;
+            Log.i(TAG, "Retrying system TTS engine bind (onInit status="
+                    + systemTtsInitStatus + ")");
+            if (androidTTS != null) {
+                try { androidTTS.stop(); } catch (Exception ignored) {}
+                try { androidTTS.shutdown(); } catch (Exception ignored) {}
+                androidTTS = null;
+            }
+            systemTtsInitStatus = SYSTEM_TTS_PENDING;
+            systemTtsReady = false;
+            systemTtsInitLatch = new CountDownLatch(1);
+            final CountDownLatch rebound = systemTtsInitLatch;
+            ttsMainHandler.post(() -> createSystemTts(rebound));
+            return rebound;
+        }
+    }
+
+    /** Await {@code latch} until {@code deadlineUptimeMs}; never throws. */
+    private void waitForLatch(CountDownLatch latch, long deadlineUptimeMs) {
+        long remaining = deadlineUptimeMs - SystemClock.uptimeMillis();
+        if (remaining <= 0) {
+            Log.w(TAG, "System TTS init wait skipped — deadline already reached");
+            return;
+        }
+        try {
+            if (!latch.await(remaining, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "System TTS init still pending after " + remaining + "ms");
+            }
+        } catch (InterruptedException e) {
+            Log.e(TAG, "System TTS init wait interrupted", e);
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Comma-joined packages of every installed TTS engine service (for logs). */
+    private String describeEngines() {
+        try {
+            List<android.content.pm.ResolveInfo> services = context.getPackageManager()
+                    .queryIntentServices(
+                            new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0);
+            if (services == null || services.isEmpty()) return "none";
+            StringBuilder sb = new StringBuilder();
+            for (android.content.pm.ResolveInfo ri : services) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append(ri.serviceInfo != null ? ri.serviceInfo.packageName : "?");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
+    /**
+     * Pick the TTS engine package to bind to explicitly, rather than relying on
+     * the framework's "default engine" setting — which is empty on phones where
+     * an engine is installed but never selected (the exact symptom reported for
+     * the Chinese TTS failure). Prefers Google's engine for the best Chinese
+     * voice support.
+     */
+    private static String chooseEnginePackage(Context ctx) {
+        try {
+            List<android.content.pm.ResolveInfo> services = ctx.getPackageManager()
+                    .queryIntentServices(
+                            new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0);
+            if (services == null || services.isEmpty()) return null;
+            for (android.content.pm.ResolveInfo ri : services) {
+                if (ri.serviceInfo != null
+                        && "com.google.android.tts".equals(ri.serviceInfo.packageName)) {
+                    return ri.serviceInfo.packageName;
+                }
+            }
+            return services.get(0).serviceInfo != null
+                    ? services.get(0).serviceInfo.packageName : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Auto-open the system TTS voice-data installer ONCE per process when a
+     * synthesis failed to activate the engine — that screen is where the user
+     * selects a TTS engine and downloads the Chinese voice data.
+     */
+    private void offerTtsDataInstallOnce() {
+        if (ttsHelpOffered) return;
+        ttsHelpOffered = true;
+        if (!isAnyTtsEngineInstalled()) return; // no engine → installer can't help
+        Log.i(TAG, "Auto-opening system TTS voice-data installer for Chinese setup");
+        try {
+            ttsMainHandler.post(this::openTtsDataInstall);
+        } catch (Exception e) {
+            Log.e(TAG, "Could not post TTS data installer launch", e);
+        }
+    }
+
+    /**
+     * True if at least one TTS engine *service* is installed and enabled on the
+     * device. Queries the PackageManager directly (flags 0, NOT
+     * MATCH_DEFAULT_ONLY) so an installed-but-not-set-as-default engine such as
+     * com.google.android.tts is still counted as present — the TextToSpeech
+     * getEngines() API's default-only filtering is what wrongly reported "no
+     * engine installed" before.
+     */
+    private boolean isAnyTtsEngineInstalled() {
+        try {
+            List<android.content.pm.ResolveInfo> services = context.getPackageManager()
+                    .queryIntentServices(
+                            new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0);
+            return services != null && !services.isEmpty();
+        } catch (Exception e) {
+            return true; // never let a diagnostic API call block the error text
+        }
+    }
+
+    /** True if the device currently has a TTS engine configured as default. */
+    private boolean hasDefaultTtsEngine() {
+        try {
+            String engine = androidTTS != null ? androidTTS.getDefaultEngine() : null;
+            return engine != null && !engine.isEmpty();
+        } catch (Exception e) {
+            return true; // can't tell — don't fabricate a "set default" hint
         }
     }
 
     private boolean synthesizeWithSystemTts(String text, String language, String outputPath) {
-        if (!systemTtsReady || androidTTS == null) {
-            lastError = "System TTS engine not ready";
+        // Make sure a bind is at least in flight before we start waiting on it.
+        ensureSystemTtsStarted();
+
+        // Give the (async) init a generously long window rather than failing
+        // immediately — the engine can legitimately take a few seconds to bind
+        // at cold start (and right after the three heavy ONNX models finish
+        // loading in parallel, the CPU is still saturated). The old code's
+        // short timeout combined with an aggressive shutdown()/recreate-on-
+        // timeout raced the slow bind and produced the persistent "System TTS
+        // engine not ready" error for every zh call; now we wait once and
+        // never destroy an instance whose bind is merely slow. All diagnostics
+        // (engine name, init status, missing-engine) are set inside await.
+        if (!awaitSystemTtsReady(SYSTEM_TTS_INIT_TIMEOUT_MS)) {
+            // lastError set inside awaitSystemTtsReady — open the system
+            // voice-data/engine setup screen once so the user can remedy it.
+            offerTtsDataInstallOnce();
+            return false;
+        }
+        if (androidTTS == null) {
+            lastError = "System TTS engine not ready (null instance)";
             return false;
         }
 
-        Locale locale = LOCALES.getOrDefault(language, Locale.ENGLISH);
-        int lr = androidTTS.setLanguage(locale);
-        if (lr == TextToSpeech.LANG_MISSING_DATA || lr == TextToSpeech.LANG_NOT_SUPPORTED) {
-            Log.w(TAG, "System TTS language not supported: " + language);
+        // For zh we must NOT silently continue after setLanguage() reports
+        // missing data — the old path logged a warning then produced a 0-byte
+        // WAV (the "Chinese TTS silently fails" symptom). Fail loudly so
+        // getLastError() tells the UI/user exactly what voice data to install.
+        Locale locale = resolveSystemLocale(language);
+        if (locale == null) {
+            return false; // lastError set inside resolveSystemLocale
         }
 
         File outputFile = new File(outputPath);
@@ -222,19 +594,113 @@ public class TTSModule {
             @Override public void onStart(String id) {}
             @Override public void onDone(String id) { success[0] = true; latch.countDown(); }
             @Override public void onError(String id) {
-                lastError = "System TTS utterance error";
+                lastError = "System TTS utterance error for [" + language + "]";
                 latch.countDown();
             }
         });
 
-        if (androidTTS.synthesizeToFile(text, null, outputFile, "omnivoice_tts")
+        if (androidTTS.synthesizeToFile(text, null, outputFile, "omnivoice_tts_" + language)
                 != TextToSpeech.SUCCESS) {
-            lastError = "System TTS synthesizeToFile rejected the request";
+            lastError = "System TTS synthesizeToFile rejected the request for [" + language + "]";
             return false;
         }
-        try { latch.await(30, TimeUnit.SECONDS); }
-        catch (InterruptedException e) { Log.e(TAG, "System TTS interrupted", e); }
-        return success[0];
+        boolean completed = false;
+        try { completed = latch.await(30, TimeUnit.SECONDS); }
+        catch (InterruptedException e) {
+            Log.e(TAG, "System TTS interrupted", e);
+            Thread.currentThread().interrupt();
+        }
+        if (!completed) {
+            lastError = "System TTS timed out synthesizing [" + language + "]";
+            return false;
+        }
+        if (!success[0]) {
+            lastError = "System TTS utterance error for [" + language + "]";
+            return false;
+        }
+        if (outputFile.length() <= 44) { // WAV header only = no audio frames
+            lastError = "System TTS produced empty audio for [" + language
+                    + "] (engine likely has no Chinese voice installed)";
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Pick a {@link Locale} the installed engine can speak for {@code language},
+     * trying reasonable variants. For Chinese we prefer Simplified (zh-CN) then
+     * Traditional (zh-TW) then the raw "zh" locale, and set a precise
+     * {@link #lastError} if none is available.
+     *
+     * @return a usable locale, or null (with {@link #lastError} set)
+     */
+    private Locale resolveSystemLocale(String language) {
+        List<Locale> candidates = new ArrayList<>();
+        if (language.startsWith("zh")) {
+            candidates.add(Locale.SIMPLIFIED_CHINESE);   // zh_CN
+            candidates.add(Locale.TRADITIONAL_CHINESE);  // zh_TW
+            candidates.add(Locale.CHINESE);              // zh
+        } else {
+            candidates.add(LOCALES.getOrDefault(language, Locale.ENGLISH));
+        }
+
+        int lastResult = TextToSpeech.LANG_NOT_SUPPORTED;
+        for (Locale loc : candidates) {
+            int r = androidTTS.setLanguage(loc);
+            if (r >= TextToSpeech.LANG_AVAILABLE) {
+                if (!loc.equals(candidates.get(0))) {
+                    Log.i(TAG, "System TTS [" + language + "] using fallback locale "
+                            + loc + " (primary unavailable, result=" + lastResult + ")");
+                }
+                return loc;
+            }
+            lastResult = r;
+            Log.w(TAG, "System TTS locale " + loc + " unavailable (result=" + r + ")");
+        }
+
+        boolean isChinese = language.startsWith("zh");
+        lastError = isChinese
+                ? "No TTS voice data installed for Chinese on this device "
+                  + "(engine " + safeEngineName() + " reports "
+                  + langStatusName(lastResult) + "). Install a Chinese voice or call "
+                  + "TTSModule.openTtsDataInstall()."
+                : "System TTS language not available for [" + language + "]: "
+                  + langStatusName(lastResult) + " (engine " + safeEngineName() + ")";
+        Log.e(TAG, lastError);
+        return null;
+    }
+
+    private static String langStatusName(int r) {
+        switch (r) {
+            case TextToSpeech.LANG_MISSING_DATA:  return "LANG_MISSING_DATA";
+            case TextToSpeech.LANG_NOT_SUPPORTED: return "LANG_NOT_SUPPORTED";
+            default:                              return "status(" + r + ")";
+        }
+    }
+
+    private String safeEngineName() {
+        try {
+            String def = androidTTS != null ? androidTTS.getDefaultEngine() : null;
+            if (def != null && !def.isEmpty()) return def;
+            if (requestedEnginePackage != null) return requestedEnginePackage;
+            List<TextToSpeech.EngineInfo> engines = androidTTS != null
+                    ? androidTTS.getEngines() : null;
+            if (engines != null && !engines.isEmpty()) return engines.get(0).name;
+            return "none";
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
+    /**
+     * Launch the system TTS voice-data installer so the user can download a
+     * Chinese voice. Wire this to a Settings button and call it when
+     * {@link #getLastError()} mentions a missing Chinese voice.
+     */
+    public void openTtsDataInstall() {
+        Intent intent = new Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        context.getApplicationContext().startActivity(intent);
     }
 
     // ------------------------------------------------------------------
