@@ -63,7 +63,9 @@ public class PipelineOrchestrator {
                 .getAbsolutePath();
         String ttsPath = tts.synthesize(translationResult.text, tgtLang, outputPath);
         long ttsMs = System.currentTimeMillis() - t0;
-        Log.i(TAG, "TTS: " + (ttsPath != null ? "success" : "failed") + " (" + ttsMs + "ms)");
+        String ttsError = (ttsPath == null) ? tts.getLastError() : null;
+        Log.i(TAG, "TTS: " + (ttsPath != null ? "success" : "failed (" + ttsError + ")")
+                + " (" + ttsMs + "ms)");
 
         long totalMs = System.currentTimeMillis() - totalStart;
         Log.i(TAG, "Pipeline total: " + totalMs + "ms");
@@ -72,7 +74,8 @@ public class PipelineOrchestrator {
                 asrResult.text,
                 translationResult.text,
                 ttsPath,
-                asrMs, translationMs, ttsMs, totalMs
+                asrMs, translationMs, ttsMs, totalMs,
+                ttsError
         );
     }
 
@@ -84,7 +87,7 @@ public class PipelineOrchestrator {
         TranslationModule.TranslationResult result = translator.translate(text, srcLang, tgtLang);
         long elapsed = System.currentTimeMillis() - t0;
 
-        return new PipelineResult(text, result.text, null, 0, elapsed, 0, elapsed);
+        return new PipelineResult(text, result.text, null, 0, elapsed, 0, elapsed, null);
     }
 
     // ----------------------------------------------------------------
@@ -99,9 +102,17 @@ public class PipelineOrchestrator {
         public final long translationMs;
         public final long ttsMs;
         public final long totalMs;
+        /** Reason TTS failed, or null if TTS succeeded. */
+        public final String ttsError;
 
         public PipelineResult(String transcript, String translation, String audioPath,
                               long asrMs, long translationMs, long ttsMs, long totalMs) {
+            this(transcript, translation, audioPath, asrMs, translationMs, ttsMs, totalMs, null);
+        }
+
+        public PipelineResult(String transcript, String translation, String audioPath,
+                              long asrMs, long translationMs, long ttsMs, long totalMs,
+                              String ttsError) {
             this.transcript = transcript;
             this.translation = translation;
             this.audioPath = audioPath;
@@ -109,6 +120,7 @@ public class PipelineOrchestrator {
             this.translationMs = translationMs;
             this.ttsMs = ttsMs;
             this.totalMs = totalMs;
+            this.ttsError = ttsError;
         }
     }
 }

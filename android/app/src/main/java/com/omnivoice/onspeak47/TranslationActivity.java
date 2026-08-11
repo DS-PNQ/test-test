@@ -197,6 +197,13 @@ public class TranslationActivity extends AppCompatActivity {
                             "ASR: %dms | Translation: %dms | TTS: %dms | Total: %dms",
                             result.asrMs, result.translationMs, result.ttsMs, result.totalMs
                     ));
+                    // Surface the real TTS failure on screen instead of a silent 0ms.
+                    if (result.ttsError != null) {
+                        android.widget.Toast.makeText(
+                                TranslationActivity.this,
+                                "TTS failed: " + result.ttsError,
+                                android.widget.Toast.LENGTH_LONG).show();
+                    }
                 });
 
                 // Play the translated audio

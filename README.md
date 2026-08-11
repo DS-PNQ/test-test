@@ -117,6 +117,9 @@ python optimize/02_prune_vocab.py
 
 # Quantize to INT8
 python optimize/03_quantize_aimet.py --method onnx_int8
+
+# Export MMS-TTS models (vi / en / zh) for on-device speech output
+python optimize/export_mms_tts.py --verify
 ```
 
 ## Android App
@@ -128,13 +131,18 @@ The Android app is in `android/`. To build:
 3. Build → Make Project (or `gradlew assembleDebug`)
 
 Required assets:
-- `NLLB_encoder.onnx`
-- `NLLB_decoder.onnx`
-- `NLLB_cache_initializer.onnx`
-- `NLLB_embed_and_lm_head.onnx`
-- `sentencepiece_bpe.model`
+- `encoder_model_int8.onnx` (NLLB encoder)
+- `decoder_model_merged_int8.onnx` (NLLB decoder)
+- `sentencepiece_bpe.model` (NLLB tokenizer)
 - `whisper_encoder.onnx`
 - `whisper_decoder.onnx`
+- `whisper_preprocess.onnx` / `whisper_postprocess.onnx` / `whisper_vocab.json`
+- `mms_tts_vi.onnx` + `mms_tts_vi_vocab.json` (MMS-TTS Vietnamese)
+- `mms_tts_en.onnx` + `mms_tts_en_vocab.json` (MMS-TTS English)
+- `mms_tts_zh.onnx` + `mms_tts_zh_vocab.json` (MMS-TTS Chinese)
+
+> The `mms_tts_*` files are optional — if not bundled, TTSModule falls back
+> to the Android system TextToSpeech engine for that language.
 
 ## Architecture
 

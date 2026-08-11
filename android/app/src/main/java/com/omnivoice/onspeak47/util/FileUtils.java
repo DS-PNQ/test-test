@@ -53,9 +53,19 @@ public final class FileUtils {
     private static void copySingleAssetToDir(Context context, String assetName, File targetDir) {
         File outFile = new File(targetDir, assetName);
 
+        // FAST PATH: reuse an existing copy — but only if it's complete. An
+        // earlier interrupted write leaves a truncated file on disk whose
+        // createSession() would then fail (or silently corrupt) forever.
         if (outFile.exists()) {
-            Log.d(TAG, "Asset already exists: " + outFile.getAbsolutePath());
-            return;
+            long expected = assetSize(context, assetName);
+            if (expected >= 0 && outFile.length() != expected) {
+                Log.w(TAG, "Discarding incomplete copy of " + assetName
+                        + " (on disk " + outFile.length() + " B vs asset " + expected + " B)");
+                outFile.delete();
+            } else {
+                Log.d(TAG, "Asset already exists: " + outFile.getAbsolutePath());
+                return;
+            }
         }
 
         // Ensure parent directories exist
@@ -82,6 +92,29 @@ public final class FileUtils {
         } catch (IOException e) {
             Log.e(TAG, "Failed to copy asset: " + assetName, e);
             if (outFile.exists()) outFile.delete();
+            // Propagate — a caller that then passes the returned path into
+            // OrtEnvironment.createSession must not be handed a missing file.
+            throw new RuntimeException("Failed to copy asset to storage: " + assetName, e);
+        }
+    }
+
+    /**
+     * Size in bytes of an asset (may exceed 2 GiB; NOT limited by
+     * AssetFileDescriptor). Returns -1 if the asset cannot be opened.
+     */
+    private static long assetSize(Context context, String assetName) {
+        try (android.content.res.AssetFileDescriptor afd =
+                     context.getAssets().openFd(assetName)) {
+            return afd.getLength();
+        } catch (IOException e) {
+            // openFd requires the asset to be stored uncompressed (it is:
+            // build.gradle noCompress covers onnx/json). If it's compressed,
+            // fall back to the stream length.
+            try (InputStream in = context.getAssets().open(assetName)) {
+                return in.available();
+            } catch (IOException e2) {
+                return -1;
+            }
         }
     }
 
