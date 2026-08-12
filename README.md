@@ -137,15 +137,28 @@ The Android app is in `android/`. To build:
 
 > The APK is built for **arm64-v8a only** (`abiFilters 'arm64-v8a'` in `app/build.gradle`).
 
+> `whisper_decoder.onnx` is exported as a **dynamic int8** quantized model (was
+> 100% fp32 ~774 MB, now ~195 MB). The fp32 original is backed up at
+> `onnx_models/whisper_decoder_fp32.onnx`; regenerate via
+> `python optimize/06_quantize_whisper.py`. Validation confirmed int8 preserves
+> the top-1 token ordering across the full 51,865-token vocab.
+
 Required assets:
 - `encoder_model_int8.onnx` (NLLB encoder)
-- `decoder_model_merged_int8.onnx` (NLLB decoder)
+- `decoder_model_merged_int8.onnx` (NLLB decoder — slimmed to drop the redundant
+  fp32 embedding, see `optimize/05_slim_decoder.py`)
 - `sentencepiece_bpe.model` (NLLB tokenizer)
 - `whisper_encoder.onnx`
-- `whisper_decoder.onnx`
+- `whisper_decoder.onnx` (dynamic int8)
 - `whisper_preprocess.onnx` / `whisper_postprocess.onnx` / `whisper_vocab.json`
 - `mms_tts_vi.onnx` + `mms_tts_vi_vocab.json` (MMS-TTS Vietnamese)
 - `mms_tts_en.onnx` + `mms_tts_en_vocab.json` (MMS-TTS English)
+
+> APK size notes: the release APK is **~1.6 GB** (under the 2 GB target). The
+> ~1.2 GB HuggingFace `hf_cache/` folder (a build-time byproduct the app never
+> reads) is excluded from packaging via `aaptOptions.ignoreAssetsPattern
+> "hf_cache"` in `app/build.gradle`. Only arm64-v8a native libs are included.
+
 
 > There is **no `mms_tts_zh` MMS-TTS asset** — Meta never released an MMS-TTS
 > Mandarin checkpoint (only Hakka `mms-tts-hak` and Min-Nan `mms-tts-nan`), so
