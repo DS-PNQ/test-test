@@ -38,7 +38,7 @@ android {
         noCompress 'onnx', 'model', 'onnx_data', 'json', 'bin'
         // HuggingFace download cache used by optimize/export_mms_tts.py must
         // never be packaged into the APK (it is a ~1.2 GB build-time artifact).
-        ignoreAssetsPattern '!hf_cache:!hf_cache/**'
+        ignoreAssetsPattern 'hf_cache:hf_cache/**'
     }
     packagingOptions {
         jniLibs {

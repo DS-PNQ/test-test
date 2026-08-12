@@ -106,8 +106,10 @@ Results are written to `docs/translation_quality_results.md`.
 ## ONNX Export
 
 ```powershell
-# Uncomment optimum/onnxruntime in requirements.txt first
-pip install optimum onnxruntime
+# requirements.txt already lists the export stack (optimum, onnx, onnxruntime,
+# onnxruntime-extensions); on Linux you may additionally `pip install aimet-torch`
+# to enable the AIMET-only quantization method.
+pip install -r requirements.txt
 
 # Export all models
 python optimize/01_export_onnx.py --verify
@@ -161,6 +163,9 @@ Required assets:
 >   no TTS engine installed at all).
 >
 > Requirements for Chinese speech output:
+> - The APK declares `<queries>` for the TTS service intent (required for
+>   Android 11+ **package visibility**), so the app can detect the engine
+>   you install.
 > - An Android TTS engine with **Chinese voice data installed** (usually
 >   Google TTS → Settings → Text-to-speech → Install voice data → 普通话).
 > - On emulators, use a **Google APIs / Play Store** AVD image — plain AOSP

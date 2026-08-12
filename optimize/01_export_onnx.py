@@ -25,6 +25,14 @@ ASSETS_DIR = Path("D:/StudioProjects/demo-3/onnx_models")
 NLLB_ENCODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_int8.onnx?download=true"
 NLLB_DECODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/decoder_model_merged_int8.onnx?download=true"
 
+# SentencePiece tokenizer from the official facebook/nllb-200-distilled-600M checkpoint.
+# Xenova's ONNX export does not bundle the .model file, so we pull it from the
+# original repo. The app expects the asset name `sentencepiece_bpe.model`
+# (see TranslationModule.VOCAB_FILE), while HF names it `sentencepiece.bpe.model`
+# (dots) — always write it under the underscore name.
+NLLB_TOKENIZER_URL = "https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/sentencepiece.bpe.model"
+NLLB_TOKENIZER_ASSET_NAME = "sentencepiece_bpe.model"
+
 def download_file(url: str, output_path: Path):
     """Download a file with progress logging."""
     if output_path.exists():
@@ -49,6 +57,40 @@ def download_file(url: str, output_path: Path):
             output_path.unlink()
 
 
+def setup_nllb_tokenizer(assets_dir: Path):
+    """Download the NLLB-200 SentencePiece model and save it under the
+    asset name the app expects.
+
+    ``02_prune_vocab.py`` only prunes embedding rows for language control
+    tokens — it never regenerates or modifies the SentencePiece ``.model``
+    file itself. The tokenizer is therefore identical between the original
+    facebook/nllb-200-distilled-600M checkpoint and any pruned variant, so
+    it can be exported verbatim here.
+    """
+    target = assets_dir / NLLB_TOKENIZER_ASSET_NAME
+    if target.exists() and target.stat().st_size > 0:
+        log.info(f"  [Skip] {target.name} already exists.")
+        return
+
+    tmp_target = assets_dir / (NLLB_TOKENIZER_ASSET_NAME + ".tmp")
+    try:
+        download_file(NLLB_TOKENIZER_URL, tmp_target)
+        if not tmp_target.exists():
+            log.error(f"  [Error] Failed to download {NLLB_TOKENIZER_ASSET_NAME}")
+            return
+        # Atomic-ish rename: tmp_target -> final name (handles 'dots' vs
+        # 'underscores' naming mismatch and removes the .tmp suffix).
+        if target.exists():
+            target.unlink()
+        tmp_target.rename(target)
+        log.info(f"  [Done] Exported NLLB tokenizer -> {target.name} "
+                 f"({target.stat().st_size / 1e6:.1f} MB)")
+    except Exception as e:
+        log.error(f"  [Error] Failed to export NLLB tokenizer: {e}")
+        if tmp_target.exists():
+            tmp_target.unlink()
+
+
 def setup_nllb(assets_dir: Path):
     """Download pre-quantized NLLB-200 models."""
     log.info("Setting up NLLB-200 models...")
@@ -56,6 +98,11 @@ def setup_nllb(assets_dir: Path):
 
     download_file(NLLB_ENCODER_URL, assets_dir / "encoder_model_int8.onnx")
     download_file(NLLB_DECODER_URL, assets_dir / "decoder_model_merged_int8.onnx")
+
+    # The ONNX weights are useless without the SentencePiece tokenizer that
+    # produced their inputs.  Export it alongside the weights so the app has
+    # everything it needs after a single run of this script.
+    setup_nllb_tokenizer(assets_dir)
 
 def export_whisper(assets_dir: Path):
     """Export Whisper Small using Optimum and move to assets."""

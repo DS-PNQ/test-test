@@ -115,6 +115,14 @@ public class TTSModule {
     /** One-shot flag: only auto-open the voice-data installer once per process. */
     private boolean ttsHelpOffered = false;
 
+    /** Well-known TTS engine packages, checked directly as a fallback. */
+    private static final String[] KNOWN_TTS_ENGINES = {
+            "com.google.android.tts", // Google Speech Services / Google TTS
+            "com.samsung.SMT",        // Samsung TTS
+            "com.iflytek.tts",        // iFlytek Speech (common on Chinese phones)
+            "com.svox.pico",          // AOSP Pico TTS (default on many emulators/ROMs)
+    };
+
     /** Sentinel meaning "TextToSpeech bind still in flight" (ERROR == -1). */
     private static final int SYSTEM_TTS_PENDING = Integer.MIN_VALUE;
 
@@ -289,7 +297,7 @@ public class TTSModule {
     private void createSystemTts(final CountDownLatch latch) {
         String engine = requestedEnginePackage;
         if (engine == null) {
-            engine = chooseEnginePackage(context);
+            engine = chooseEnginePackage();
             requestedEnginePackage = engine;
             Log.i(TAG, "System TTS: explicit engine="
                     + (engine != null ? engine : "none — falling back to framework default"));
@@ -464,20 +472,8 @@ public class TTSModule {
 
     /** Comma-joined packages of every installed TTS engine service (for logs). */
     private String describeEngines() {
-        try {
-            List<android.content.pm.ResolveInfo> services = context.getPackageManager()
-                    .queryIntentServices(
-                            new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0);
-            if (services == null || services.isEmpty()) return "none";
-            StringBuilder sb = new StringBuilder();
-            for (android.content.pm.ResolveInfo ri : services) {
-                if (sb.length() > 0) sb.append(", ");
-                sb.append(ri.serviceInfo != null ? ri.serviceInfo.packageName : "?");
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            return "unknown";
-        }
+        List<String> engines = discoveredEngines();
+        return engines.isEmpty() ? "none" : String.join(", ", engines);
     }
 
     /**
@@ -487,23 +483,57 @@ public class TTSModule {
      * the Chinese TTS failure). Prefers Google's engine for the best Chinese
      * voice support.
      */
-    private static String chooseEnginePackage(Context ctx) {
+    private String chooseEnginePackage() {
+        List<String> engines = discoveredEngines();
+        if (engines.isEmpty()) return null;
+        for (String pkg : engines) {
+            if ("com.google.android.tts".equals(pkg)) return pkg;
+        }
+        return engines.get(0);
+    }
+
+    /**
+     * Every TTS engine visible to this app. Returns the union of:
+     * 1. the installed services matching {@code TTS_SERVICE} (requires the
+     *    manifest {@code <queries>} declaration on Android 11+ — added), and
+     * 2. well-known engine packages present on the device.
+     */
+    private List<String> discoveredEngines() {
+        List<String> out = new ArrayList<>();
         try {
-            List<android.content.pm.ResolveInfo> services = ctx.getPackageManager()
-                    .queryIntentServices(
-                            new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0);
-            if (services == null || services.isEmpty()) return null;
-            for (android.content.pm.ResolveInfo ri : services) {
-                if (ri.serviceInfo != null
-                        && "com.google.android.tts".equals(ri.serviceInfo.packageName)) {
-                    return ri.serviceInfo.packageName;
+            android.content.pm.PackageManager pm = context.getPackageManager();
+            // MATCH_ALL is essential on API 33+: a freshly-installed TTS engine
+            // (Google TTS / Samsung TTS) is often present but not yet enabled,
+            // and flag 0 omits disabled/inactive components entirely — which
+            // made an installed engine look "not installed". MATCH_ALL (value
+            // 0x00020000 covering disabled components) returns them so we can
+            // still bind explicitly. The <queries> TTS_SERVICE entry in the
+            // manifest is what makes these services visible at all on API 30+.
+            int flags = android.os.Build.VERSION.SDK_INT >= 33
+                    ? android.content.pm.PackageManager.MATCH_ALL
+                    : android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS;
+            List<android.content.pm.ResolveInfo> services = pm.queryIntentServices(
+                    new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), flags);
+            if (services != null) {
+                for (android.content.pm.ResolveInfo ri : services) {
+                    if (ri.serviceInfo != null) {
+                        String pkg = ri.serviceInfo.packageName;
+                        if (!out.contains(pkg)) out.add(pkg);
+                    }
                 }
             }
-            return services.get(0).serviceInfo != null
-                    ? services.get(0).serviceInfo.packageName : null;
-        } catch (Exception e) {
-            return null;
-        }
+        } catch (Exception ignored) {}
+        try {
+            android.content.pm.PackageManager pm = context.getPackageManager();
+            for (String pkg : KNOWN_TTS_ENGINES) {
+                if (out.contains(pkg)) continue;
+                try {
+                    pm.getPackageInfo(pkg, 0);
+                    out.add(pkg);
+                } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {}
+            }
+        } catch (Exception ignored) {}
+        return out;
     }
 
     /**
@@ -529,17 +559,11 @@ public class TTSModule {
      * MATCH_DEFAULT_ONLY) so an installed-but-not-set-as-default engine such as
      * com.google.android.tts is still counted as present — the TextToSpeech
      * getEngines() API's default-only filtering is what wrongly reported "no
-     * engine installed" before.
+     * engine installed" before. Requires the manifest {@code <queries>} entry
+     * for the TTS service on Android 11+ (added in AndroidManifest.xml).
      */
     private boolean isAnyTtsEngineInstalled() {
-        try {
-            List<android.content.pm.ResolveInfo> services = context.getPackageManager()
-                    .queryIntentServices(
-                            new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0);
-            return services != null && !services.isEmpty();
-        } catch (Exception e) {
-            return true; // never let a diagnostic API call block the error text
-        }
+        return !discoveredEngines().isEmpty();
     }
 
     /** True if the device currently has a TTS engine configured as default. */

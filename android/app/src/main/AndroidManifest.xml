@@ -13,6 +13,26 @@
     <!-- Wake lock to keep processing during translation -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+      Android 11+ package visibility: without these declarations the app
+      cannot RESOLVE installed TTS engine services or the system voice-data
+      installer — even when Google TTS is installed — which made Chinese
+      system TTS report "no engine installed / engine not ready". Queried
+      by TTSModule (chooseEnginePackage / isAnyTtsEngineInstalled).
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_INSTALL_DATA" />
+        </intent>
+        <package android:name="com.google.android.tts" />
+        <package android:name="com.samsung.SMT" />
+        <package android:name="com.iflytek.tts" />
+        <package android:name="com.svox.pico" />
+    </queries>
+
     <application
         android:name=".OmniVoiceApp"
         android:allowBackup="false"
