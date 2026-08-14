@@ -22,10 +22,11 @@ import com.omnivoice.onspeak47.util.LanguageConfig;
 
 /**
  * Global Application class — manages the lifecycle of the three
- * pipeline models (Whisper, NLLB, MMS-TTS).
+ * pipeline models (Whisper, HY-MT translation, MMS-TTS).
  *
- * Modeled after RTranslator-2.00's {@code Global.java} but scoped
- * to the VN↔EN/VN↔CN language pairs only.
+ * Translation is treated as optional: when the HY-MT model is not
+ * yet installed, the app starts normally with ASR and TTS working;
+ * translation returns a "not available" placeholder.
  */
 public class OmniVoiceApp extends Application {
 
@@ -73,7 +74,12 @@ public class OmniVoiceApp extends Application {
     }
 
     /**
-     * Initialize the Translation (NLLB) module.
+     * Initialize the Translation (HY-MT) module.
+     *
+     * <p>Always succeeds — if the HY-MT model is not installed the
+     * module initializes in "unavailable" mode and translate() calls
+     * return a placeholder.  This keeps the app usable for ASR + TTS
+     * even before the translation model is set up.</p>
      */
     public void initializeTranslation(@NonNull InitListener listener) {
         if (translationModule != null) {
@@ -83,10 +89,16 @@ public class OmniVoiceApp extends Application {
         new Thread(() -> {
             try {
                 translationModule = new TranslationModule(this);
+                if (!translationModule.isReady()) {
+                    Log.w(TAG, "Translation module loaded but model unavailable "
+                            + "— translate() will return placeholders");
+                }
                 mainHandler.post(listener::onInitialized);
             } catch (Exception e) {
                 Log.e(TAG, "Translation init failed", e);
-                mainHandler.post(() -> listener.onError("Translation initialization failed: " + e.getMessage()));
+                // Non-fatal: let the app continue without translation
+                translationModule = new TranslationModule(this);
+                mainHandler.post(listener::onInitialized);
             }
         }).start();
     }
@@ -132,14 +144,19 @@ public class OmniVoiceApp extends Application {
                 }
             }).start();
 
-            // Load Translation in parallel
+            // Load Translation in parallel (non-fatal if model unavailable)
             new Thread(() -> {
                 try {
                     translationModule = new TranslationModule(OmniVoiceApp.this);
-                    Log.i(TAG, "Translation module loaded");
+                    if (translationModule.isReady()) {
+                        Log.i(TAG, "Translation module loaded (HY-MT)");
+                    } else {
+                        Log.w(TAG, "Translation module loaded but model unavailable");
+                    }
                 } catch (Exception e) {
-                    Log.e(TAG, "Translation init failed", e);
-                    errors[1] = "Translation initialization failed: " + e.getMessage();
+                    Log.e(TAG, "Translation init failed (non-fatal)", e);
+                    // Create a stub so the rest of the pipeline can proceed
+                    translationModule = new TranslationModule(OmniVoiceApp.this);
                 } finally {
                     latch.countDown();
                 }
@@ -166,15 +183,19 @@ public class OmniVoiceApp extends Application {
                 return;
             }
 
-            // Check for errors
-            for (String error : errors) {
-                if (error != null) {
-                    mainHandler.post(() -> listener.onError(error));
-                    return;
-                }
+            // Check for fatal errors (ASR and TTS are required; translation is optional)
+            if (errors[0] != null) {
+                final String err = errors[0];
+                mainHandler.post(() -> listener.onError(err));
+                return;
+            }
+            if (errors[2] != null) {
+                final String err = errors[2];
+                mainHandler.post(() -> listener.onError(err));
+                return;
             }
 
-            // All loaded successfully — create orchestrator
+            // Create orchestrator (translation may be in stub/unavailable mode)
             orchestrator = new PipelineOrchestrator(asrModule, translationModule, ttsModule);
             mainHandler.post(listener::onInitialized);
         }).start();
@@ -184,7 +205,7 @@ public class OmniVoiceApp extends Application {
      * Create orchestrator instance if modules are initialized.
      */
     public void createOrchestrator() {
-        if (asrModule != null && translationModule != null && ttsModule != null) {
+        if (asrModule != null && ttsModule != null) {
             orchestrator = new PipelineOrchestrator(asrModule, translationModule, ttsModule);
         }
     }

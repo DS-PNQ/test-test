@@ -3,22 +3,32 @@
 # --- Phase 2 local accuracy/quality tests (backend/, tests_local/) ---
 # CPU-only: plain `torch` resolves to the CPU wheel on Windows/PyPI.
 torch>=2.2
-transformers>=4.42
-sentencepiece>=0.1.99   # required by NLLB-200 tokenizer
-protobuf>=3.20          # needed for some slow-tokenizer conversions (sentencepiece path)
+transformers>=4.56.0    # HY-MT1.5 needs >= 4.56 per the model card
+sentencepiece>=0.1.99   # tokenizer backend
+protobuf>=3.20          # slow-tokenizer conversions
 accelerate>=0.30        # smoother device_map / low-mem model loading in transformers
 soundfile>=0.12         # audio-file decode backend used by librosa.load (ASR input)
 librosa>=0.10           # resample arbitrary input audio to Whisper's required 16kHz
 scipy>=1.11             # writing MMS-TTS waveform output to disk
 numpy>=1.26
+psutil>=5.9             # RAM-based profile detection (low_ram vs high_end)
+huggingface_hub>=0.23   # HY-MT model download
 jiwer>=3.0               # WER/CER scoring for ASR accuracy tests
 sacrebleu>=2.4           # BLEU scoring for translation quality tests
 pytest>=8.0              # test runner for tests_local/
 
+# --- HY-MT translation backend ---
+# Pick exactly one of these depending on your host:
+#   - llama-cpp-python compiled from llama.cpp PR #22836 (STQ kernel)
+#     for the 4-6 GB / 1.25-bit GGUF profile
+#   - onnxruntime-genai for the INT4 ONNX / ORT GenAI (QNN/CPU) profile
+llama-cpp-python>=0.3.0   # optional: low-RAM (GGUF) path
+onnxruntime-genai>=0.5.0  # optional: high-end (INT4 ONNX) path
+
 # --- ONNX export / Qualcomm AI Hub (optimize/) — only needed for the export/quantize scripts ---
 optimum>=1.20
 onnx>=1.16
-onnxruntime>=1.18
+onnxruntime>=1.19
 onnxruntime-extensions>=0.13  # tokenizer graph emission in 01_export_onnx.py
 qai-hub                      # Qualcomm AI Hub SDK (requires API token)
 

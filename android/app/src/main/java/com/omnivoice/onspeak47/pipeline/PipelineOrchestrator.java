@@ -51,8 +51,13 @@ public class PipelineOrchestrator {
 
         // --- Stage 2: Translation (Text → Translated Text) ---
         t0 = System.currentTimeMillis();
-        TranslationModule.TranslationResult translationResult =
-                translator.translate(asrResult.text, srcLang, tgtLang);
+        TranslationModule.TranslationResult translationResult;
+        if (translator != null) {
+            translationResult = translator.translate(asrResult.text, srcLang, tgtLang);
+        } else {
+            translationResult = new TranslationModule.TranslationResult(
+                    "[translation unavailable — translator not initialized]", 0);
+        }
         long translationMs = System.currentTimeMillis() - t0;
         Log.i(TAG, "Translation: \"" + translationResult.text + "\" (" + translationMs + "ms)");
 
@@ -84,7 +89,13 @@ public class PipelineOrchestrator {
      */
     public PipelineResult translateText(String text, String srcLang, String tgtLang) {
         long t0 = System.currentTimeMillis();
-        TranslationModule.TranslationResult result = translator.translate(text, srcLang, tgtLang);
+        TranslationModule.TranslationResult result;
+        if (translator != null) {
+            result = translator.translate(text, srcLang, tgtLang);
+        } else {
+            result = new TranslationModule.TranslationResult(
+                    "[translation unavailable — translator not initialized]", 0);
+        }
         long elapsed = System.currentTimeMillis() - t0;
 
         return new PipelineResult(text, result.text, null, 0, elapsed, 0, elapsed, null);

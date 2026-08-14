@@ -6,6 +6,9 @@ onnx_models/
 *.bin
 *.pt
 *.pth
+*.gguf
+*.safetensors
+android/app/src/main/assets/hf_cache/
 
 # Python
 .venv/

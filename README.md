@@ -11,7 +11,7 @@ Edge AI Challenge, Phase 2 | Public Services domain | Android-first, wearable-re
 ```
 [User speaks]
     → Whisper Small — transcribes speech to text
-    → NLLB-200 Distilled 600M — translates text between VN/EN/CN
+    → HY-MT1.5-1.8B — translates text between VN/EN/CN
     → MMS-TTS — converts translated text back to speech
 [Translated speech plays]
 ```
@@ -24,14 +24,14 @@ Three models, three stages. No language-branching — every input goes through t
 OnSpeak47/
 ├── backend/                    # Python pipeline modules
 │   ├── asr_whisper.py         # Whisper Small ASR wrapper
-│   ├── translation_nllb.py    # NLLB-200 translation (batch, pivot, corpus)
+│   ├── translation_hymt.py    # HY-MT1.5-1.8B translation (batch, pivot, corpus)
 │   ├── tts_mms.py             # MMS-TTS speech synthesis
 │   └── orchestrator.py        # ASR → Translation → TTS pipeline
 │
 ├── tests_local/               # Local quality tests (no device needed)
 │   ├── conftest.py            # Fixtures for all test modules
 │   ├── test_01_asr.py         # Whisper transcription accuracy
-│   ├── test_02_translation.py # NLLB BLEU scoring (parallel sentences)
+│   ├── test_02_translation.py # HY-MT BLEU scoring (parallel sentences)
 │   ├── test_03_tts.py         # MMS-TTS synthesis validation
 │   ├── test_04_vizh_corpus.py # Large-corpus VI↔ZH BLEU evaluation
 │   ├── test_05_pipeline.py    # End-to-end pipeline tests
@@ -40,7 +40,6 @@ OnSpeak47/
 │
 ├── optimize/                  # ONNX export & mobile optimization
 │   ├── 01_export_onnx.py     # Export all models to ONNX
-│   ├── 02_prune_vocab.py     # Prune NLLB vocabulary to VN/EN/CN
 │   ├── 03_quantize_aimet.py  # INT8 quantization (generic + AIMET)
 │   └── 04_qah_submit.py     # Qualcomm AI Hub submission
 │
@@ -81,7 +80,7 @@ python -c "import torch, transformers, sentencepiece, soundfile, librosa, scipy,
 
 ## Running Tests
 
-### Translation quality (NLLB BLEU)
+### Translation quality (HY-MT BLEU)
 ```powershell
 python -m pytest tests_local/test_02_translation.py -v
 ```
@@ -114,9 +113,6 @@ pip install -r requirements.txt
 # Export all models
 python optimize/01_export_onnx.py --verify
 
-# Prune NLLB vocabulary to VN/EN/CN
-python optimize/02_prune_vocab.py
-
 # Quantize to INT8
 python optimize/03_quantize_aimet.py --method onnx_int8
 
@@ -144,10 +140,7 @@ The Android app is in `android/`. To build:
 > the top-1 token ordering across the full 51,865-token vocab.
 
 Required assets:
-- `encoder_model_int8.onnx` (NLLB encoder)
-- `decoder_model_merged_int8.onnx` (NLLB decoder — slimmed to drop the redundant
-  fp32 embedding, see `optimize/05_slim_decoder.py`)
-- `sentencepiece_bpe.model` (NLLB tokenizer)
+- `Hy-MT1.5-1.8B-1.25bit.gguf` (HY-MT1.5-1.8B 1.25-bit STQ GGUF model)
 - `whisper_encoder.onnx`
 - `whisper_decoder.onnx` (dynamic int8)
 - `whisper_preprocess.onnx` / `whisper_postprocess.onnx` / `whisper_vocab.json`

@@ -1,7 +1,8 @@
 # OmniVoice — Model Export & Download Script
 #
 # Automates the setup of ONNX models for the Android app.
-# 1. Downloads NLLB-200 quantized models from Hugging Face.
+# 1. Builds / downloads HY-MT1.5-1.8B INT4 ONNX assets (from
+#    tencent/HY-MT1.5-1.8B-GPTQ-Int4) via onnxruntime-genai.
 # 2. Exports Whisper Small to ONNX using Optimum.
 # 3. Places all files directly into the Android assets directory.
 
@@ -12,26 +13,19 @@ import json
 import logging
 import shutil
 import sys
+import subprocess
 import urllib.request
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
-# Target directory: Output to a dedicated folder on D:
-ASSETS_DIR = Path("D:/StudioProjects/demo-3/onnx_models")
+# Target directory: Output to the Android assets directory
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "android" / "app" / "src" / "main" / "assets"
 
-# URLs for NLLB-200 (Xenova's quantized versions)
-NLLB_ENCODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_int8.onnx?download=true"
-NLLB_DECODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/decoder_model_merged_int8.onnx?download=true"
+GGUF_REPO = "tencent/Hy-MT1.5-1.8B-1.25bit-GGUF"
+GGUF_FILE = "Hy-MT1.5-1.8B-1.25bit.gguf"
 
-# SentencePiece tokenizer from the official facebook/nllb-200-distilled-600M checkpoint.
-# Xenova's ONNX export does not bundle the .model file, so we pull it from the
-# original repo. The app expects the asset name `sentencepiece_bpe.model`
-# (see TranslationModule.VOCAB_FILE), while HF names it `sentencepiece.bpe.model`
-# (dots) — always write it under the underscore name.
-NLLB_TOKENIZER_URL = "https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/sentencepiece.bpe.model"
-NLLB_TOKENIZER_ASSET_NAME = "sentencepiece_bpe.model"
 
 def download_file(url: str, output_path: Path):
     """Download a file with progress logging."""
@@ -57,52 +51,28 @@ def download_file(url: str, output_path: Path):
             output_path.unlink()
 
 
-def setup_nllb_tokenizer(assets_dir: Path):
-    """Download the NLLB-200 SentencePiece model and save it under the
-    asset name the app expects.
-
-    ``02_prune_vocab.py`` only prunes embedding rows for language control
-    tokens — it never regenerates or modifies the SentencePiece ``.model``
-    file itself. The tokenizer is therefore identical between the original
-    facebook/nllb-200-distilled-600M checkpoint and any pruned variant, so
-    it can be exported verbatim here.
-    """
-    target = assets_dir / NLLB_TOKENIZER_ASSET_NAME
-    if target.exists() and target.stat().st_size > 0:
-        log.info(f"  [Skip] {target.name} already exists.")
+def setup_hymt(assets_dir: Path):
+    """Download the HY-MT1.5-1.8B GGUF model directly to the assets directory."""
+    log.info("Downloading HY-MT1.5-1.8B GGUF model...")
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    out_file = assets_dir / GGUF_FILE
+    if out_file.exists():
+        log.info(f"  [Skip] {out_file.name} already exists ({out_file.stat().st_size / 1e6:.1f} MB).")
         return
 
-    tmp_target = assets_dir / (NLLB_TOKENIZER_ASSET_NAME + ".tmp")
     try:
-        download_file(NLLB_TOKENIZER_URL, tmp_target)
-        if not tmp_target.exists():
-            log.error(f"  [Error] Failed to download {NLLB_TOKENIZER_ASSET_NAME}")
-            return
-        # Atomic-ish rename: tmp_target -> final name (handles 'dots' vs
-        # 'underscores' naming mismatch and removes the .tmp suffix).
-        if target.exists():
-            target.unlink()
-        tmp_target.rename(target)
-        log.info(f"  [Done] Exported NLLB tokenizer -> {target.name} "
-                 f"({target.stat().st_size / 1e6:.1f} MB)")
+        from huggingface_hub import hf_hub_download
+        log.info(f"  Downloading {GGUF_FILE} from {GGUF_REPO}...")
+        downloaded = hf_hub_download(
+            repo_id=GGUF_REPO,
+            filename=GGUF_FILE,
+            local_dir=str(assets_dir),
+        )
+        log.info(f"  [Done] HY-MT GGUF saved to {downloaded}")
     except Exception as e:
-        log.error(f"  [Error] Failed to export NLLB tokenizer: {e}")
-        if tmp_target.exists():
-            tmp_target.unlink()
+        log.error(f"  [Error] Failed to download HY-MT GGUF: {e}")
+        log.info("  Make sure `pip install huggingface_hub` is installed.")
 
-
-def setup_nllb(assets_dir: Path):
-    """Download pre-quantized NLLB-200 models."""
-    log.info("Setting up NLLB-200 models...")
-    assets_dir.mkdir(parents=True, exist_ok=True)
-
-    download_file(NLLB_ENCODER_URL, assets_dir / "encoder_model_int8.onnx")
-    download_file(NLLB_DECODER_URL, assets_dir / "decoder_model_merged_int8.onnx")
-
-    # The ONNX weights are useless without the SentencePiece tokenizer that
-    # produced their inputs.  Export it alongside the weights so the app has
-    # everything it needs after a single run of this script.
-    setup_nllb_tokenizer(assets_dir)
 
 def export_whisper(assets_dir: Path):
     """Export Whisper Small using Optimum and move to assets."""
@@ -249,26 +219,26 @@ def export_whisper_processing(assets_dir: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download or Export ONNX models to Android assets")
+    parser = argparse.ArgumentParser(description="Download or Export models to Android assets")
     parser.add_argument("--assets-dir", type=Path, default=ASSETS_DIR)
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=["nllb", "whisper", "all"],
+        choices=["hymt", "whisper", "all"],
         default=["all"],
     )
     args = parser.parse_args()
 
-    models = args.models if "all" not in args.models else ["nllb", "whisper"]
+    models = args.models if "all" not in args.models else ["hymt", "whisper"]
 
-    if "nllb" in models:
-        setup_nllb(args.assets_dir)
+    if "hymt" in models:
+        setup_hymt(args.assets_dir)
     if "whisper" in models:
         export_whisper(args.assets_dir)
         export_whisper_processing(args.assets_dir)
 
-    log.info("Workflow complete. Large models are now in assets/.")
-    log.info("IMPORTANT: Add *.onnx and *.model to your .gitignore before pushing!")
+    log.info("Workflow complete. Models are now in assets/.")
+    log.info("IMPORTANT: Add *.onnx, *.gguf and *.model to your .gitignore before pushing!")
 
 
 if __name__ == "__main__":

@@ -109,7 +109,7 @@ class TestViZhCorpus:
 
         Compares BLEU with and without ``preprocess_chinese()`` on zh inputs.
         """
-        from backend.translation_nllb import NLLBTranslator
+        from backend.translation_hymt import NLLBTranslator
 
         pairs = vizh_test_data[:50]
         references = [p["vi"] for p in pairs]
