@@ -25,6 +25,7 @@ import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
 import com.omnivoice.onspeak47.util.FileUtils;
+import com.omnivoice.onspeak47.util.OrtSessionConfig;
 import com.omnivoice.onspeak47.util.TensorUtils;
 
 
@@ -37,6 +38,7 @@ public class ASRModule {
 
     private static final String ENCODER_FILE = "whisper_encoder.onnx";
     private static final String DECODER_FILE = "whisper_decoder.onnx";
+    private static final String PREPROCESS_FILE = "whisper_preprocess.onnx";
     private static final int SAMPLE_RATE = 16000;
     private static final int N_MELS = 80;
     private static final int N_FFT = 512;        
@@ -48,6 +50,8 @@ public class ASRModule {
     private final OrtEnvironment env;
     private OrtSession encoderSession;
     private OrtSession decoderSession;
+    /** Native PCM->log-mel graph (ort-extensions); null -> Java DSP fallback. */
+    private OrtSession preprocessSession;
 
     // Whisper special token IDs
     private static final int SOT = 50258;        
@@ -112,23 +116,31 @@ public class ASRModule {
         String encoderPath = copyModelToInternal(context, ENCODER_FILE);
         String decoderPath = copyModelToInternal(context, DECODER_FILE);
 
-        OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+        // Mobile-tuned options (arena/memory-pattern off on low-RAM devices,
+        // NNAPI off by default) — see OrtSessionConfig.
+        OrtSession.SessionOptions options = OrtSessionConfig.create(context, true);
         try {
-            options.registerCustomOpLibrary(ai.onnxruntime.extensions.OrtxPackage.getLibraryPath());
-        } catch (OrtException e) {
-            Log.e(TAG, "Extensions library not found", e);
-        }
-        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            encoderSession = env.createSession(encoderPath, options);
+            decoderSession = env.createSession(decoderPath, options);
 
-        try {
-            options.addNnapi();
-            Log.i(TAG, "NNAPI execution provider enabled for ASR");
-        } catch (OrtException e) {
-            Log.w(TAG, "NNAPI not available, using CPU fallback", e);
+            // Optional native pre-processing graph: raw PCM -> log-mel via
+            // ort-extensions custom ops (same approach as RTranslator's
+            // Whisper initializer). Missing/broken asset -> Java DSP fallback.
+            String preprocessPath = copyModelToInternalOptional(context, PREPROCESS_FILE);
+            if (preprocessPath != null) {
+                try {
+                    preprocessSession = env.createSession(preprocessPath, options);
+                    Log.i(TAG, "Whisper ONNX preprocessing enabled");
+                } catch (OrtException e) {
+                    preprocessSession = null;
+                    Log.w(TAG, "Failed to load whisper_preprocess.onnx — Java DSP fallback: " + e.getMessage());
+                }
+            } else {
+                Log.i(TAG, "whisper_preprocess.onnx not bundled — using Java DSP fallback");
+            }
+        } finally {
+            options.close();
         }
-
-        encoderSession = env.createSession(encoderPath, options);
-        decoderSession = env.createSession(decoderPath, options);
 
         loadVocabulary(context);
         Log.i(TAG, "ASR module initialized (Whisper Small)");
@@ -143,10 +155,25 @@ public class ASRModule {
                 return new ASRResult("[No audio recorded]", language != null ? language : "auto", 0);
             }
 
-            float[][] melFeatures = extractMelFeatures(audioPath);
-            OnnxTensor encoderOutput = runEncoder(melFeatures);
-            String text = runDecoder(encoderOutput, language);
-            if (encoderOutput != null) encoderOutput.close();
+            float[] audioSamples = readWavPCM(audioPath);
+
+            // Prefer the native ONNX preprocessing graph; fall back to the
+            // Java DSP path when the asset or the run is unavailable.
+            OrtSession.Result preprocessResult = runPreprocess(audioSamples);
+
+            OrtSession.Result encoderResult = null;
+            String text;
+            try {
+                if (preprocessResult != null) {
+                    encoderResult = runEncoder((OnnxTensor) preprocessResult.get(0));
+                } else {
+                    encoderResult = runEncoder(extractMelFeatures(audioSamples));
+                }
+                text = runDecoder(encoderResult, language);
+            } finally {
+                if (encoderResult != null) encoderResult.close();
+                if (preprocessResult != null) preprocessResult.close();
+            }
 
             long elapsed = System.currentTimeMillis() - startTime;
             Log.i(TAG, "Transcription done in " + elapsed + "ms: " + text);
@@ -157,128 +184,248 @@ public class ASRModule {
         }
     }
 
-    private OnnxTensor runEncoder(float[][] melFeatures) throws OrtException {
-        if (encoderSession == null) return null;
-        long[] shape = new long[]{1, melFeatures.length, melFeatures[0].length};
-        float[] flat = TensorUtils.flatten2D(melFeatures);
-        OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(flat), shape);
-
-        Map<String, OnnxTensor> inputs = new HashMap<>();
-        inputs.put("input_features", inputTensor);
-
-        try (OrtSession.Result result = encoderSession.run(inputs)) {
-            inputTensor.close();
-            return TensorUtils.cloneTensor(env, (OnnxTensor) result.get(0));
+    /**
+     * Runs the exported whisper_preprocess.onnx graph (raw 16 kHz PCM ->
+     * normalized log-mel) natively via the ort-extensions custom ops, the
+     * same approach as RTranslator's Whisper initializer. The graph pads to
+     * the fixed 3000-frame window internally, so the PCM is passed at its
+     * REAL length — no 30 s pre-padding.
+     *
+     * @return the open Result owning the `input_features` tensor, or null to
+     *         fall back to the Java DSP path (no session / bad input / error).
+     */
+    private OrtSession.Result runPreprocess(float[] audioSamples) {
+        if (preprocessSession == null || audioSamples == null || audioSamples.length == 0) return null;
+        try {
+            String inputName = preprocessSession.getInputNames().iterator().next();
+            // The declared input rank decides between (N) and (1, N) — the
+            // exact contract varies across onnxruntime-extensions versions.
+            ai.onnxruntime.TensorInfo inputInfo =
+                    (ai.onnxruntime.TensorInfo) preprocessSession.getInputInfo()
+                            .get(inputName).getInfo();
+            long[] declared = inputInfo.getShape();
+            long[] shape = declared.length == 1
+                    ? new long[]{audioSamples.length}
+                    : new long[]{1, audioSamples.length};
+            OnnxTensor audioTensor = OnnxTensor.createTensor(
+                    env, FloatBuffer.wrap(audioSamples), shape);
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            inputs.put(inputName, audioTensor);
+            try {
+                return preprocessSession.run(inputs);
+            } finally {
+                audioTensor.close();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "ONNX preprocessing failed, using Java DSP fallback: " + e.getMessage());
+            return null;
         }
     }
 
-    private String runDecoder(OnnxTensor encoderOutput, String language) throws OrtException {
-        if (decoderSession == null || encoderOutput == null) return "";
+    /**
+     * Runs the encoder and returns the OPEN Result that owns the output
+     * tensor. Callers must keep it alive while decoding (the decoder consumes
+     * Result-owned tensors directly) and close it when done — no Java-side
+     * clone of the encoder output.
+     */
+    private OrtSession.Result runEncoder(OnnxTensor inputFeatures) throws OrtException {
+        if (encoderSession == null) return null;
+        Map<String, OnnxTensor> inputs = new HashMap<>();
+        inputs.put("input_features", inputFeatures);
+        return encoderSession.run(inputs);
+    }
+
+    private OrtSession.Result runEncoder(float[][] melFeatures) throws OrtException {
+        if (encoderSession == null || melFeatures == null) return null;
+        long[] shape = new long[]{1, melFeatures.length, melFeatures[0].length};
+        float[] flat = TensorUtils.flatten2D(melFeatures);
+        OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(flat), shape);
+        try {
+            return runEncoder(inputTensor);
+        } finally {
+            inputTensor.close();
+        }
+    }
+
+    private String runDecoder(OrtSession.Result encoderResult, String language) throws OrtException {
+        if (decoderSession == null || encoderResult == null) return "";
+        // Owned by encoderResult — valid until the caller closes it.
+        OnnxTensor encoderOutput = (OnnxTensor) encoderResult.get(0);
 
         int langToken = language != null && LANGUAGE_TOKENS.containsKey(language)
                 ? LANGUAGE_TOKENS.get(language)
                 : LANGUAGE_TOKENS.get("vi");
 
         ArrayList<Integer> outputTokens = new ArrayList<>();
-        int currentToken;
         long[] initialTokens = new long[]{SOT, langToken, TRANSCRIBE, NO_TIMESTAMPS};
 
-        Map<String, OnnxTensor> pastKeyValues = new HashMap<>();
+        // Detect the decoder graph's cache contract.
         boolean hasCacheBranch = false;
-        boolean hasKVCache = false;
-
+        ArrayList<String> pastNames = new ArrayList<>();   // decoder.* and encoder.* pasts together
         for (String inputName : decoderSession.getInputNames()) {
             if (inputName.equals("use_cache_branch")) hasCacheBranch = true;
-            else if (inputName.startsWith("past_key_values")) {
-                hasKVCache = true;
-                pastKeyValues.put(inputName, TensorUtils.createFloatTensor(env, new long[]{1, 12, 0, 64}));
-            }
+            else if (inputName.startsWith("past_key_values")) pastNames.add(inputName);
         }
 
-        try {
-            if (hasKVCache) {
-                OnnxTensor inputIds = OnnxTensor.createTensor(env, java.nio.LongBuffer.wrap(initialTokens), new long[]{1, initialTokens.length});
-                Map<String, OnnxTensor> inputs = new HashMap<>();
-                inputs.put("input_ids", inputIds);
-                inputs.put("encoder_hidden_states", encoderOutput);
-                inputs.putAll(pastKeyValues);
-                if (hasCacheBranch) inputs.put("use_cache_branch", TensorUtils.booleanToTensor(env, false));
-
-                try (OrtSession.Result result = decoderSession.run(inputs)) {
-                    inputIds.close();
-                    if (hasCacheBranch) inputs.get("use_cache_branch").close();
-                    float[][][] logits = (float[][][]) result.get(0).getValue();
-                    currentToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
-                    if (currentToken != EOT) outputTokens.add(currentToken);
-
-                    Map<String, OnnxTensor> nextPastKV = new HashMap<>();
-                    for (Map.Entry<String, OnnxValue> entry : result) {
-                        if (entry.getKey().startsWith("present")) {
-                            String pastName = entry.getKey().replace("present", "past_key_values");
-                            nextPastKV.put(pastName, TensorUtils.cloneTensor(env, (OnnxTensor) entry.getValue()));
-                        }
-                    }
-                    for (OnnxTensor t : pastKeyValues.values()) t.close();
-                    pastKeyValues = nextPastKV;
-                }
-
-                for (int i = 1; i < MAX_TOKENS && currentToken != EOT; i++) {
-                    OnnxTensor singleTokenTensor = OnnxTensor.createTensor(env, java.nio.LongBuffer.wrap(new long[]{currentToken}), new long[]{1, 1});
-                    inputs = new HashMap<>();
-                    inputs.put("input_ids", singleTokenTensor);
-                    inputs.put("encoder_hidden_states", encoderOutput);
-                    inputs.putAll(pastKeyValues);
-                    if (hasCacheBranch) inputs.put("use_cache_branch", TensorUtils.booleanToTensor(env, true));
-
-                    try (OrtSession.Result result = decoderSession.run(inputs)) {
-                        singleTokenTensor.close();
-                        if (hasCacheBranch) inputs.get("use_cache_branch").close();
-                        float[][][] logits = (float[][][]) result.get(0).getValue();
-                        currentToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
-                        if (currentToken == EOT) break;
-                        outputTokens.add(currentToken);
-
-                        Map<String, OnnxTensor> nextPKV = new HashMap<>();
-                        for (Map.Entry<String, OnnxValue> entry : result) {
-                            if (entry.getKey().startsWith("present")) {
-                                String pastName = entry.getKey().replace("present", "past_key_values");
-                                nextPKV.put(pastName, TensorUtils.cloneTensor(env, (OnnxTensor) entry.getValue()));
-                            }
-                        }
-                        for (OnnxTensor t : pastKeyValues.values()) t.close();
-                        pastKeyValues = nextPKV;
-                    }
-                }
-            } else {
-                long[] currentTokens = initialTokens.clone();
-                for (int i = 0; i < MAX_TOKENS; i++) {
-                    OnnxTensor inputIds = OnnxTensor.createTensor(env, java.nio.LongBuffer.wrap(currentTokens), new long[]{1, currentTokens.length});
-                    Map<String, OnnxTensor> inputs = new HashMap<>();
-                    inputs.put("input_ids", inputIds);
-                    inputs.put("encoder_hidden_states", encoderOutput);
-
-                    try (OrtSession.Result result = decoderSession.run(inputs)) {
-                        float[][][] logits = (float[][][]) result.get(0).getValue();
-                        int nextToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
-                        if (nextToken == EOT) break;
-                        outputTokens.add(nextToken);
-                        long[] nextTokens = new long[currentTokens.length + 1];
-                        System.arraycopy(currentTokens, 0, nextTokens, 0, currentTokens.length);
-                        nextTokens[currentTokens.length] = nextToken;
-                        currentTokens = nextTokens;
-                    } finally {
-                        inputIds.close();
-                    }
-                }
+        if (!pastNames.isEmpty()) {
+            try {
+                decodeWithCache(encoderOutput, initialTokens, outputTokens, hasCacheBranch, pastNames);
+            } catch (Exception e) {
+                // The cache path is validated, but stay consistent with
+                // TranslationModule: on any cache-path failure, redo the
+                // decode with the whole-sequence fallback instead of
+                // returning partial output.
+                Log.e(TAG, "KV-cache decode failed — retrying with whole-sequence "
+                        + "decode: " + e.getMessage(), e);
+                outputTokens.clear();
+                decodeNoCache(encoderOutput, initialTokens, outputTokens, hasCacheBranch, pastNames);
             }
-        } catch (Exception e) {
-            Log.e(TAG, "ASR decoder loop error", e);
-        } finally {
-            for (OnnxTensor t : pastKeyValues.values()) {
-                try { t.close(); } catch (Exception ignored) {}
-            }
+        } else {
+            decodeNoCache(encoderOutput, initialTokens, outputTokens, hasCacheBranch, pastNames);
         }
         return decodeTokens(outputTokens);
+    }
+
+    /**
+     * KV-cached greedy decode using the zero-copy pattern proven by
+     * RTranslator: the decoder self-attention `present.*` tensors owned by
+     * the previous step's Result are fed straight back in as
+     * `past_key_values.*`, and the previous Result is closed only AFTER the
+     * next run has consumed them. No Java-side cloning of the KV tensors
+     * (the old loop deep-copied all of them through the Java heap on every
+     * generated token).
+     *
+     * Cross-attention K/V are constant after prefill, so — like RTranslator's
+     * cache initializer — the prefill Result stays open and its
+     * `present.*.encoder.*` tensors are re-fed on EVERY step instead of
+     * cycling the (potentially malformed on quantized graphs) encoder
+     * presents of later steps.
+     */
+    private void decodeWithCache(OnnxTensor encoderOutput, long[] initialTokens,
+                                 ArrayList<Integer> outputTokens,
+                                 boolean hasCacheBranch, ArrayList<String> pastNames) throws OrtException {
+        OrtSession.Result prefillResult = null;
+        OrtSession.Result result = null;
+        try {
+            // Prefill: the 4 fixed prompt tokens in one pass, cache branch off.
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            ArrayList<OnnxTensor> created = new ArrayList<>();   // tensors this step owns (must close)
+            addDecoderStepInputs(inputs, created, initialTokens, encoderOutput,
+                    hasCacheBranch, false, pastNames, null, null);
+
+            int currentToken = -1;
+            while (true) {
+                OrtSession.Result newResult;
+                try {
+                    newResult = decoderSession.run(inputs);
+                } finally {
+                    // The run consumed our small per-step tensors; past tensors
+                    // inside `inputs` are owned by open Results, not by us.
+                    for (OnnxTensor t : created) t.close();
+                }
+                // Free the previous step's Result only now. Never close the
+                // prefill Result here: after the first iteration it is
+                // aliased by `result`, and its encoder presents must stay
+                // alive for every remaining step.
+                if (result != null && result != prefillResult) result.close();
+                result = newResult;
+                if (prefillResult == null) prefillResult = newResult;
+
+                float[][][] logits = (float[][][]) result.get(0).getValue();
+                currentToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
+                if (currentToken == EOT) break;
+                outputTokens.add(currentToken);
+                if (outputTokens.size() >= MAX_TOKENS) break;
+
+                // Next step: exactly one token, cache branch on. Decoder pasts
+                // come from the previous step; encoder pasts from prefill.
+                inputs = new HashMap<>();
+                created = new ArrayList<>();
+                addDecoderStepInputs(inputs, created, new long[]{currentToken}, encoderOutput,
+                        hasCacheBranch, true, pastNames, result, prefillResult);
+            }
+        } finally {
+            if (result != null) result.close();
+            if (prefillResult != null && prefillResult != result) prefillResult.close();
+        }
+    }
+
+    /**
+     * Assembles one decoder step's input map. Tensors created here are
+     * recorded in {@code created} for closing right after the run;
+     * {@code encoderOutput} is owned by the encoder Result and Result-owned
+     * past tensors are not closed here. {@code pastSource} null means
+     * prefill (empty past); on decode steps, decoder pasts cycle from
+     * {@code pastSource} while encoder pasts are re-fed from
+     * {@code prefillSource}.
+     */
+    private void addDecoderStepInputs(Map<String, OnnxTensor> inputs, ArrayList<OnnxTensor> created,
+                                      long[] tokenIds, OnnxTensor encoderOutput,
+                                      boolean hasCacheBranch, boolean useCache,
+                                      ArrayList<String> pastNames,
+                                      OrtSession.Result pastSource, OrtSession.Result prefillSource) throws OrtException {
+        OnnxTensor ids = OnnxTensor.createTensor(env, java.nio.LongBuffer.wrap(tokenIds),
+                new long[]{1, tokenIds.length});
+        inputs.put("input_ids", ids);
+        created.add(ids);
+        inputs.put("encoder_hidden_states", encoderOutput);
+        if (hasCacheBranch) {
+            OnnxTensor flag = TensorUtils.booleanToTensor(env, useCache);
+            inputs.put("use_cache_branch", flag);
+            created.add(flag);
+        }
+        for (String n : pastNames) {
+            // Encoder pasts re-feed from prefill once decoding has started.
+            OrtSession.Result source =
+                    (pastSource != null && n.contains(".encoder.")) ? prefillSource : pastSource;
+            OnnxTensor t = null;
+            if (source != null) {
+                String presentName = n.replaceFirst("^past_key_values\\.", "present.");
+                java.util.Optional<OnnxValue> v = source.get(presentName);
+                if (v.isPresent()) t = (OnnxTensor) v.get();
+                // A missing `present` output mid-decode violates the merged-export
+                // contract — fail loudly instead of feeding an empty past (which
+                // corrupts the cross-attention cache).
+                else throw new OrtException("decoder did not return '" + presentName + "'");
+            }
+            if (t == null) {
+                // Whisper-small: 12 heads x 64 head_dim (batch=1, seq=0).
+                t = TensorUtils.createFloatTensor(env, new long[]{1, 12, 0, 64});
+                created.add(t);
+            }
+            inputs.put(n, t);
+        }
+    }
+
+    /**
+     * Whole-sequence fallback (O(n^2)): re-feeds the accumulated tokens with
+     * use_cache_branch=false and empty past tensors each step. Builds inputs
+     * via addDecoderStepInputs so the FULL input contract is fed — a merged
+     * graph still requires use_cache_branch and every past_key_values input
+     * on each run ("Missing Input" otherwise).
+     */
+    private void decodeNoCache(OnnxTensor encoderOutput, long[] initialTokens,
+                               ArrayList<Integer> outputTokens,
+                               boolean hasCacheBranch, ArrayList<String> pastNames) throws OrtException {
+        long[] currentTokens = initialTokens.clone();
+        for (int i = 0; i < MAX_TOKENS; i++) {
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            ArrayList<OnnxTensor> created = new ArrayList<>();
+            addDecoderStepInputs(inputs, created, currentTokens, encoderOutput,
+                    hasCacheBranch, false, pastNames, null, null);
+            try (OrtSession.Result result = decoderSession.run(inputs)) {
+                float[][][] logits = (float[][][]) result.get(0).getValue();
+                int nextToken = TensorUtils.argmax(logits[0][logits[0].length - 1]);
+                if (nextToken == EOT) break;
+                outputTokens.add(nextToken);
+                long[] nextTokens = new long[currentTokens.length + 1];
+                System.arraycopy(currentTokens, 0, nextTokens, 0, currentTokens.length);
+                nextTokens[currentTokens.length] = nextToken;
+                currentTokens = nextTokens;
+            } finally {
+                for (OnnxTensor t : created) t.close();
+            }
+        }
     }
 
     private void loadVocabulary(Context context) {
@@ -342,20 +489,20 @@ public class ASRModule {
         }
     }
 
-    private float[][] extractMelFeatures(String audioPath) {
-        float[] audioSamples = readWavPCM(audioPath);
+    /**
+     * Java DSP fallback when whisper_preprocess.onnx is unavailable. The
+     * log-mel is computed for the audio's REAL length only; the mel matrix is
+     * padded to the fixed 3000-frame window afterwards (the normalization
+     * loop below fills beyond numFrames with the clamp floor). The old code
+     * padded the PCM to 30 s FIRST, making a 3 s clip pay for all 3000 FFT
+     * frames (~10x the necessary DSP work).
+     */
+    private float[][] extractMelFeatures(float[] audioSamples) {
         if (audioSamples == null || audioSamples.length == 0) return new float[N_MELS][MAX_AUDIO_FRAMES];
 
         float maxAbs = 0;
         for (float s : audioSamples) if (Math.abs(s) > maxAbs) maxAbs = Math.abs(s);
         Log.i(TAG, "Max audio level: " + maxAbs);
-
-        int targetSamples = SAMPLE_RATE * 30;
-        if (audioSamples.length < targetSamples) {
-            float[] padded = new float[targetSamples];
-            System.arraycopy(audioSamples, 0, padded, 0, audioSamples.length);
-            audioSamples = padded;
-        }
 
         int numFrames = audioSamples.length / HOP_LENGTH;
         if (numFrames > MAX_AUDIO_FRAMES) numFrames = MAX_AUDIO_FRAMES;
@@ -504,6 +651,17 @@ public class ASRModule {
         File outFile = new File(context.getFilesDir(), assetName);
         if (!outFile.exists()) FileUtils.copyAssetToInternal(context, assetName);
         return outFile.getAbsolutePath();
+    }
+
+    /** Like {@link #copyModelToInternal}, but returns null when the asset is
+     *  not bundled in the APK (used for the optional preprocess graph). */
+    private String copyModelToInternalOptional(Context context, String assetName) {
+        try {
+            context.getAssets().open(assetName).close();
+        } catch (IOException e) {
+            return null;
+        }
+        return copyModelToInternal(context, assetName);
     }
 
     public static class ASRResult {

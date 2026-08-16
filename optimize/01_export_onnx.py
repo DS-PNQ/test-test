@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(me
 log = logging.getLogger(__name__)
 
 # Target directory: Output to a dedicated folder on D:
-ASSETS_DIR = Path("D:/StudioProjects/demo-3/onnx_models")
+ASSETS_DIR = Path("D:/StudioProjects/OmniVoice/onnx_models")
 
 # URLs for NLLB-200 (Xenova's quantized versions)
 NLLB_ENCODER_URL = "https://huggingface.co/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_int8.onnx?download=true"
