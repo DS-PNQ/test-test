@@ -31,3 +31,8 @@ android/.idea/
 *.swp
 *.bak
 .DS_Store
+
+# Local tooling
+.venv-ort122/
+.zcode/
+.pytest_cache/

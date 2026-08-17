@@ -30,6 +30,9 @@ import com.omnivoice.onspeak47.pipeline.PipelineOrchestrator;
 import com.omnivoice.onspeak47.util.LanguageConfig;
 
 import java.io.File;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 
 /**
@@ -62,6 +65,14 @@ public class TranslationActivity extends AppCompatActivity {
     private String tgtLang = "en";
     private boolean isRecording = false;
 
+    // Single-thread pipeline executor: ASR/NLLB/VITS are CPU-bound and each
+    // request holds decoder KV caches, so two concurrent pipelines spike RAM
+    // (critical on a ≤4 GB wearable) and thrash caches for no throughput gain.
+    // Rapid re-taps are latest-wins: a stale request exits at the next stage
+    // boundary via its generation counter.
+    private ExecutorService pipelineExecutor;
+    private final AtomicInteger requestGeneration = new AtomicInteger();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -72,6 +83,7 @@ public class TranslationActivity extends AppCompatActivity {
         orchestrator = app.getOrchestrator();
         recorder = new AudioRecorder();
         player = new AudioPlayer();
+        pipelineExecutor = Executors.newSingleThreadExecutor();
 
         // Bind UI
         talkButton = findViewById(R.id.btn_talk);
@@ -184,11 +196,19 @@ public class TranslationActivity extends AppCompatActivity {
             return;
         }
 
-        // Run pipeline in background
-        new Thread(() -> {
+        // Run pipeline on the single-thread executor (latest-wins cancel)
+        final int generation = requestGeneration.incrementAndGet();
+        pipelineExecutor.execute(() -> {
             try {
                 PipelineOrchestrator.PipelineResult result =
-                        orchestrator.process(audioPath, srcLang, tgtLang);
+                        orchestrator.process(audioPath, srcLang, tgtLang,
+                                () -> generation != requestGeneration.get());
+
+                if (result == null                 // superseded between stages
+                        || generation != requestGeneration.get()) {
+                    Log.i(TAG, "Pipeline request #" + generation + " superseded — dropped");
+                    return;
+                }
 
                 runOnUiThread(() -> {
                     transcriptView.setText(result.transcript);
@@ -215,7 +235,7 @@ public class TranslationActivity extends AppCompatActivity {
                 Log.e(TAG, "Pipeline error", e);
                 runOnUiThread(() -> transcriptView.setText("Error: " + e.getMessage()));
             }
-        }).start();
+        });
     }
 
     // ----------------------------------------------------------------
@@ -250,5 +270,9 @@ public class TranslationActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         if (player != null) player.release();
+        if (pipelineExecutor != null) {
+            pipelineExecutor.shutdownNow();
+            pipelineExecutor = null;
+        }
     }
 }

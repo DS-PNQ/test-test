@@ -38,16 +38,22 @@ public class PipelineOrchestrator {
      * @param audioPath Path to input audio (16kHz WAV)
      * @param srcLang   Source language ("vi", "en", "zh")
      * @param tgtLang   Target language
-     * @return Pipeline result with transcript, translation, and output audio path
+     * @return Pipeline result with transcript, translation, and output audio path,
+     *         or null when {@code cancelled} became true between stages.
      */
-    public PipelineResult process(String audioPath, String srcLang, String tgtLang) {
+    public PipelineResult process(String audioPath, String srcLang, String tgtLang,
+                                  java.util.function.BooleanSupplier cancelled) {
         long totalStart = System.currentTimeMillis();
+        logMemory("start");
 
         // --- Stage 1: ASR (Speech → Text) ---
         long t0 = System.currentTimeMillis();
         ASRModule.ASRResult asrResult = asr.transcribe(audioPath, srcLang);
         long asrMs = System.currentTimeMillis() - t0;
         Log.i(TAG, "ASR: \"" + asrResult.text + "\" (" + asrMs + "ms)");
+        logMemory("after-ASR");
+
+        if (cancelled.getAsBoolean()) return null;
 
         // --- Stage 2: Translation (Text → Translated Text) ---
         t0 = System.currentTimeMillis();
@@ -55,6 +61,9 @@ public class PipelineOrchestrator {
                 translator.translate(asrResult.text, srcLang, tgtLang);
         long translationMs = System.currentTimeMillis() - t0;
         Log.i(TAG, "Translation: \"" + translationResult.text + "\" (" + translationMs + "ms)");
+        logMemory("after-Translation");
+
+        if (cancelled.getAsBoolean()) return null;
 
         // --- Stage 3: TTS (Translated Text → Speech) ---
         t0 = System.currentTimeMillis();
@@ -66,6 +75,7 @@ public class PipelineOrchestrator {
         String ttsError = (ttsPath == null) ? tts.getLastError() : null;
         Log.i(TAG, "TTS: " + (ttsPath != null ? "success" : "failed (" + ttsError + ")")
                 + " (" + ttsMs + "ms)");
+        logMemory("after-TTS");
 
         long totalMs = System.currentTimeMillis() - totalStart;
         Log.i(TAG, "Pipeline total: " + totalMs + "ms");
@@ -77,6 +87,26 @@ public class PipelineOrchestrator {
                 asrMs, translationMs, ttsMs, totalMs,
                 ttsError
         );
+    }
+
+    /** Convenience overload without cancellation. */
+    public PipelineResult process(String audioPath, String srcLang, String tgtLang) {
+        return process(audioPath, srcLang, tgtLang, () -> false);
+    }
+
+    /**
+     * Per-stage resident-memory probe for on-device benchmarking
+     * (adb logcat -s PipelineOrchestrator). getTotalPss includes all
+     * proportional mappings — the number LMK judges the app by.
+     */
+    private void logMemory(String stage) {
+        try {
+            android.os.Debug.MemoryInfo info = new android.os.Debug.MemoryInfo();
+            android.os.Debug.getMemoryInfo(info);
+            Log.i(TAG, "MEM[" + stage + "] totalPss=" + (info.getTotalPss() / 1024) + "MB");
+        } catch (Exception ignored) {
+            // MemoryInfo is best-effort instrumentation only.
+        }
     }
 
     /**

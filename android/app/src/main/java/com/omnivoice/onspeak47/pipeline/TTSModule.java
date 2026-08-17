@@ -144,6 +144,8 @@ public class TTSModule {
     private final Map<String, OrtSession> ortSessions = new HashMap<>();
     private final Map<String, MmsTtsTokenizer> tokenizers = new HashMap<>();
     private final Map<String, Integer> sampleRates = new HashMap<>();
+    /** Bundled language -> copied ONNX model path; sessions are created lazily. */
+    private final Map<String, String> modelPaths = new HashMap<>();
     private OrtEnvironment env;
     private File baseDir;
 
@@ -737,8 +739,11 @@ public class TTSModule {
         baseDir = context.getExternalFilesDir(null);
         if (baseDir == null) baseDir = context.getFilesDir();
 
-        // Probe + load a session for every supported language whose ONNX
-        // asset is actually bundled in the APK.
+        // Probe + copy assets for every supported language whose ONNX model
+        // is bundled, and load the cheap tokenizer/config eagerly. The VITS
+        // sessions (~114 MB each) are created LAZILY on first synthesis (see
+        // getOrtSession) with at most one resident at a time — on a ≤4 GB
+        // wearable this keeps ~114-229 MB of RAM free until TTS is used.
         for (String lang : SUPPORTED) {
             String onnxName = "mms_tts_" + lang + ".onnx";
             String vocabName = "mms_tts_" + lang + "_vocab.json";
@@ -750,45 +755,67 @@ public class TTSModule {
                 String onnxPath = FileUtils.copyAssetToDir(context, onnxName, baseDir);
                 String vocabPath = FileUtils.copyAssetToDir(context, vocabName, baseDir);
 
-                OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
-                opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-                try {
-                    opts.registerCustomOpLibrary(OrtxPackage.getLibraryPath());
-                } catch (OrtException e) { /* extensions optional */ }
-                // NOTE: NNAPI is intentionally NOT enabled for MMS-TTS (VITS).
-                // Unlike Whisper/NLLB, the VITS decoder graph is built from ops
-                // NNAPI does not support: 1D Conv (NNAPI is 2D-only),
-                // RandomNormalLike (the noise sampling node), 1D Resize/Upsample
-                // and dynamic-shape Scatter/CumSum duration expansion. Registering
-                // NNAPI makes ORT partition the graph at createSession and then
-                // throw inside session.run() on the dynamic-sequence Conv1d /
-                // RandomNormalLike boundary — which the catch in runOnnxSynthesis
-                // swallows, producing the silent "TTS: 0ms" failure. VITS runs
-                // fast enough on the CPU EP for these short utterances.
-                Log.i(TAG, "TTS [" + lang + "] using CPU EP (NNAPI disabled — unsupported VITS ops)");
-
-                ortSessions.put(lang, env.createSession(onnxPath, opts));
+                modelPaths.put(lang, onnxPath);
                 tokenizers.put(lang, new MmsTtsTokenizer(vocabPath));
                 sampleRates.put(lang, loadSampleRate(lang));
-                opts.close();
-                Log.i(TAG, "Loaded MMS-TTS ONNX for [" + lang + "] @ "
-                        + sampleRates.get(lang) + "Hz");
-                Log.i(TAG, "MMS-TTS [" + lang + "] model inputs: "
-                        + ortSessions.get(lang).getInputNames());
-            } catch (OrtException e) {
-                ortSessions.remove(lang);
-                tokenizers.remove(lang);
-                sampleRates.remove(lang);
-                Log.e(TAG, "Failed to load MMS-TTS ONNX for [" + lang
-                        + "] — system TTS fallback will be used", e);
+                Log.i(TAG, "Bundled MMS-TTS for [" + lang + "] @ "
+                        + sampleRates.get(lang) + "Hz (session lazy)");
             } catch (IOException e) {
                 Log.i(TAG, "No bundled MMS-TTS asset for [" + lang + "] (" + onnxName + ")");
             }
         }
     }
 
+    /**
+     * Returns the VITS session for a language, creating it on first use.
+     * LRU-1: switching languages closes the previous session, so at most one
+     * ~114 MB model is resident at a time (wearable RAM budget).
+     */
+    private synchronized OrtSession getOrtSession(String language) {
+        OrtSession session = ortSessions.get(language);
+        if (session != null) return session;
+
+        String onnxPath = modelPaths.get(language);
+        if (onnxPath == null) return null;
+
+        for (Map.Entry<String, OrtSession> e : ortSessions.entrySet()) {
+            try { e.getValue().close(); } catch (Exception ignored) {}
+            Log.i(TAG, "TTS evicted session [" + e.getKey() + "] (LRU-1, ~114 MB freed)");
+        }
+        ortSessions.clear();
+
+        OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
+        try {
+            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            try {
+                opts.registerCustomOpLibrary(OrtxPackage.getLibraryPath());
+            } catch (OrtException e) { /* extensions optional */ }
+            // NOTE: NNAPI is intentionally NOT enabled for MMS-TTS (VITS).
+            // Unlike Whisper/NLLB, the VITS decoder graph is built from ops
+            // NNAPI does not support: 1D Conv (NNAPI is 2D-only),
+            // RandomNormalLike (the noise sampling node), 1D Resize/Upsample
+            // and dynamic-shape Scatter/CumSum duration expansion. Registering
+            // NNAPI makes ORT partition the graph at createSession and then
+            // throw inside session.run() on the dynamic-sequence Conv1d /
+            // RandomNormalLike boundary — which the catch in runOnnxSynthesis
+            // swallows, producing the silent "TTS: 0ms" failure. VITS runs
+            // fast enough on the CPU EP for these short utterances.
+            session = env.createSession(onnxPath, opts);
+            ortSessions.put(language, session);
+            Log.i(TAG, "TTS [" + language + "] session created (CPU EP, NNAPI off — "
+                    + "unsupported VITS ops); model inputs: " + session.getInputNames());
+        } catch (OrtException e) {
+            session = null;
+            Log.e(TAG, "Failed to load MMS-TTS ONNX for [" + language
+                    + "] — system TTS fallback will be used", e);
+        } finally {
+            opts.close();
+        }
+        return session;
+    }
+
     private boolean hasOnnxModel(String language) {
-        return ortSessions.containsKey(language) && tokenizers.containsKey(language);
+        return modelPaths.containsKey(language) && tokenizers.containsKey(language);
     }
 
     /**
@@ -799,7 +826,7 @@ public class TTSModule {
      *   output "waveform"    : float32 [batch, 1, time]
      */
     private boolean runOnnxSynthesis(String text, String language, String outputPath) {
-        OrtSession session = ortSessions.get(language);
+        OrtSession session = getOrtSession(language);   // lazy, LRU-1
         MmsTtsTokenizer tokenizer = tokenizers.get(language);
         if (session == null || tokenizer == null) return false;
 

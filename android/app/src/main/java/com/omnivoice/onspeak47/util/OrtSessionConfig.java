@@ -8,6 +8,9 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.util.Log;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.extensions.OrtxPackage;
@@ -48,6 +51,14 @@ public final class OrtSessionConfig {
      */
     public static final boolean USE_NNAPI = false;
 
+    /**
+     * Enable the XNNPACK execution provider (experimental, Phase 3.1):
+     * accelerates fp32 Conv/MatMul workloads — most relevant for the Whisper
+     * encoder if it stays fp32. A/B on device with the PipelineOrchestrator
+     * timing/MEM[...] logs before making this true by default.
+     */
+    public static final boolean USE_XNNPACK = false;
+
     private OrtSessionConfig() {}
 
     /**
@@ -57,6 +68,18 @@ public final class OrtSessionConfig {
      * creating its sessions.
      */
     public static OrtSession.SessionOptions create(Context context, boolean registerOrtx) throws OrtException {
+        return create(context, registerOrtx, false);
+    }
+
+    /**
+     * @param preOptimized true when loading a graph already optimized offline
+     *                     by optimize/07_preoptimize.py (*.opt.onnx) — runtime
+     *                     re-optimization is then skipped (NO_OPT), removing
+     *                     the multi-second createSession pass and its peak-RAM
+     *                     spike on device.
+     */
+    public static OrtSession.SessionOptions create(Context context, boolean registerOrtx,
+                                                   boolean preOptimized) throws OrtException {
         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
         if (registerOrtx) {
             try {
@@ -68,7 +91,9 @@ public final class OrtSessionConfig {
         boolean lowRam = isLowRamDevice(context);
         options.setCPUArenaAllocator(!lowRam);
         options.setMemoryPatternOptimization(!lowRam);
-        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+        options.setOptimizationLevel(preOptimized
+                ? OrtSession.SessionOptions.OptLevel.NO_OPT
+                : OrtSession.SessionOptions.OptLevel.ALL_OPT);
         if (USE_NNAPI) {
             try {
                 options.addNnapi();
@@ -77,8 +102,21 @@ public final class OrtSessionConfig {
                 Log.w(TAG, "NNAPI not available, using CPU fallback", e);
             }
         }
+        if (USE_XNNPACK) {
+            try {
+                Map<String, String> xnnpackOpts = new HashMap<>();
+                xnnpackOpts.put("intra_op_num_threads",
+                        String.valueOf(Math.max(2, Runtime.getRuntime().availableProcessors() / 2)));
+                options.addXnnpack(xnnpackOpts);
+                Log.i(TAG, "XNNPACK execution provider enabled");
+            } catch (OrtException e) {
+                Log.w(TAG, "XNNPACK not available, using CPU fallback", e);
+            }
+        }
         Log.i(TAG, "Session options: arena=" + !lowRam + ", memPattern=" + !lowRam
-                + ", nnapi=" + USE_NNAPI + " (lowRamDevice=" + lowRam + ")");
+                + ", nnapi=" + USE_NNAPI + ", optLevel="
+                + (preOptimized ? "NO_OPT (pre-optimized graph)" : "ALL_OPT")
+                + " (lowRamDevice=" + lowRam + ")");
         return options;
     }
 
