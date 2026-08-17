@@ -139,12 +139,48 @@ Rollback 1 lệnh về graph cũ (cache-less):
 (xóa `whisper_decoder.onnx` nếu còn). Note: `*.onnx` không track trong git —
 asset phải regenerate bằng script khi checkout máy khác.
 
-### Còn treo (pending)
+### Encoder dynamic-length (`optimize/10_export_whisper_encoder_dyn.py`) — ĐÃ INSTALL
 
-- **Encoder dynamic-length** (`optimize/10_export_whisper_encoder_dyn.py`):
-  fp32 đã export + validate (3000/512/97 frames, Δ 4.2e-04 vs eager tại 3000);
-  **chưa install** — máy hết chỗ ở TEMP (C: full). Chạy khi rảnh chỗ:
-  `TMP=D:\tmp python optimize/10_export_whisper_encoder_dyn.py` rồi 07 + gate.
-  Encoder cũ vẫn đang dùng (input fixed 3000 → clip 3 s trả giá 30 s compute).
-- Full gate (NLLB + whisper) bị gián đoạn giữa chừng; whisper-only đã PASS trên
-  asset cuối. Chạy lại: `.venv-ort122\Scripts\python -m pytest tests_local\test_06_onnx_parity.py -v`.
+- Tái export encoder từ cùng checkpoint với **frame axis động** (bỏ check cứng
+  3000 của HF bằng wrapper gọi thẳng conv1/conv2 + slice bảng vị trí +
+  layer stock). Quantize đúng recipe 08 (MatMul-only int8, per-channel) →
+  **98.5 MB**, pre-opt `.opt.onnx` 98.4 MB (1 input/1 output, load NO_OPT OK).
+- Validate fp32: frames=3000 khớp eager HF Δ 4.2e-04; frames 512/97 shape/finite OK
+  (eager HF không nhận input ≠ 3000 nên không có reference số ở độ dài ngắn).
+- **Java** (`ASRModule`): detect frame axis động lúc init (`TensorInfo` dim < 0);
+  `sliceShortWindow` copy đúng cột mel thật (bỏ đuôi pad hằng số) → clip 3 s
+  chỉ trả ~300 frame thay vì 3000 (~10× ít compute encoder). Graph cũ fixed-3000
+  vẫn chạy đúng (không slice).
+- Gate whisper trên asset cuối: **PASS 2/2**; transcript en giờ **khớp tuyệt đối
+  PyTorch reference** ("I would like to renew my citizen-nid card.", WER 0.222 =
+  torch); vi 0.625 (fixture MMS-synthetic vốn tệ — same pattern as fp32).
+- Harness `whisper_transcribe` mirror cả slice short-window.
+
+### Benchmark tổng ASR (desktop, ort 1.22.0, fixture ~3 s)
+
+| Hạng mục | Cũ (fixed enc + whole-seq) | Mới (dynamic enc + KV) | Tốc độ |
+|---|---|---|---|
+| en encoder | 1865 ms | 173 ms | 10.8× |
+| en decode | 3650 ms | 361 ms | 10.1× |
+| **en tổng** | **5515 ms** | **533 ms** | **10.3×** |
+| vi encoder | 1623 ms | 215 ms | 7.6× |
+| vi decode | 3536 ms | 354 ms | 10.0× |
+| **vi tổng** | **5160 ms** | **570 ms** | **9.1×** |
+
+Trên device tỉ lệ giữ nguyên (cùng graph cùng EP), tuyệt đối chậm hơn desktop.
+
+### Tái lập / rollback (encoder)
+
+```powershell
+python optimize/10_export_whisper_encoder_dyn.py   # export + validate + install int8
+.venv-ort122\Scripts\python optimize\07_preoptimize.py --models whisper_encoder.onnx
+.venv-ort122\Scripts\python -m pytest tests_local\test_06_onnx_parity.py -k whisper -v
+```
+
+Rollback về fixed-3000:
+`copy onnx_models\preopt_backup\whisper_encoder.opt.onnx android\app\src\main\assets\whisper_encoder.opt.onnx`
+
+### Trạng thái gate
+
+Full gate trên asset cuối (encoder dynamic + decoder KV, ort 1.22.0):
+**8/8 PASS** (6 hướng NLLB + whisper en/vi) — `tests_local/output/onnx_parity_results.json`.

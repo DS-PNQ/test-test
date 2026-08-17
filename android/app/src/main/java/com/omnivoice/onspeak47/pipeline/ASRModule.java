@@ -52,6 +52,9 @@ public class ASRModule {
     private OrtSession decoderSession;
     /** Native PCM->log-mel graph (ort-extensions); null -> Java DSP fallback. */
     private OrtSession preprocessSession;
+    /** True when the encoder graph accepts a dynamic frame axis (the
+     *  optimize/10 export) — enables short-window mel feeding. */
+    private boolean encoderDynamicFrames;
 
     // Whisper special token IDs
     private static final int SOT = 50258;        
@@ -115,6 +118,7 @@ public class ASRModule {
 
         encoderSession = createSessionPreferPreopt(context, ENCODER_FILE);
         decoderSession = createSessionPreferPreopt(context, DECODER_FILE);
+        encoderDynamicFrames = detectDynamicFrames(encoderSession);
 
         // Optional native pre-processing graph: raw PCM -> log-mel via
         // ort-extensions custom ops (same approach as RTranslator's
@@ -138,7 +142,8 @@ public class ASRModule {
         }
 
         loadVocabulary(context);
-        Log.i(TAG, "ASR module initialized (Whisper Small)");
+        Log.i(TAG, "ASR module initialized (Whisper Small, encoder="
+                + (encoderDynamicFrames ? "dynamic-length" : "fixed 3000") + ")");
     }
 
     /**
@@ -192,10 +197,34 @@ public class ASRModule {
             OrtSession.Result encoderResult = null;
             String text;
             try {
+                OnnxTensor melTensor;
+                boolean ownMel;
                 if (preprocessResult != null) {
-                    encoderResult = runEncoder((OnnxTensor) preprocessResult.get(0));
+                    melTensor = (OnnxTensor) preprocessResult.get(0);
+                    ownMel = false;
                 } else {
-                    encoderResult = runEncoder(extractMelFeatures(audioSamples));
+                    float[][] mel = extractMelFeatures(audioSamples);
+                    melTensor = OnnxTensor.createTensor(env,
+                            FloatBuffer.wrap(TensorUtils.flatten2D(mel)),
+                            new long[]{1, mel.length, mel[0].length});
+                    ownMel = true;
+                }
+                try {
+                    // Dynamic-length encoder: feed only the audio's real
+                    // frames — a 3 s clip skips ~90% of the 30 s window's
+                    // compute (the skipped columns are constant padding).
+                    OnnxTensor fed = melTensor;
+                    OnnxTensor sliced = encoderDynamicFrames && audioSamples != null
+                            ? sliceShortWindow(melTensor, audioSamples.length)
+                            : null;
+                    if (sliced != null) fed = sliced;
+                    try {
+                        encoderResult = runEncoder(fed);
+                    } finally {
+                        if (sliced != null) sliced.close();
+                    }
+                } finally {
+                    if (ownMel) melTensor.close();
                 }
                 text = normalizeTranscript(runDecoder(encoderResult, language, maxTokens));
             } finally {
@@ -263,16 +292,42 @@ public class ASRModule {
         return encoderSession.run(inputs);
     }
 
-    private OrtSession.Result runEncoder(float[][] melFeatures) throws OrtException {
-        if (encoderSession == null || melFeatures == null) return null;
-        long[] shape = new long[]{1, melFeatures.length, melFeatures[0].length};
-        float[] flat = TensorUtils.flatten2D(melFeatures);
-        OnnxTensor inputTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(flat), shape);
+    /** True when the encoder's input_features frame axis is symbolic (dynamic
+     *  dims read back as -1 from TensorInfo). */
+    private static boolean detectDynamicFrames(OrtSession session) {
         try {
-            return runEncoder(inputTensor);
-        } finally {
-            inputTensor.close();
+            ai.onnxruntime.TensorInfo info = (ai.onnxruntime.TensorInfo)
+                    session.getInputInfo().get("input_features").getInfo();
+            long[] shape = info.getShape();
+            return shape.length >= 3 && shape[2] < 0;
+        } catch (Exception e) {
+            return false;
         }
+    }
+
+    /**
+     * Copies the first {@code frames} mel columns of the padded (1,80,3000)
+     * mel tensor into a new (1,80,frames) tensor for the dynamic-length
+     * encoder (optimize/10 export) — short clips pay only their real length
+     * of encoder compute. The skipped columns are the constant clamp-padding
+     * tail, so no real signal is dropped. Returns null when the tensor is
+     * already short enough (nothing to slice).
+     */
+    private OnnxTensor sliceShortWindow(OnnxTensor mel, int audioSamplesLength) throws OrtException {
+        int frames = Math.min(MAX_AUDIO_FRAMES,
+                Math.max(8, audioSamplesLength / HOP_LENGTH));
+        long[] shape = mel.getInfo().getShape();
+        if (shape.length != 3 || shape[2] <= frames) return null;
+        int nMels = (int) shape[1];
+        int srcLen = (int) shape[2];
+        FloatBuffer src = mel.getFloatBuffer();
+        float[] out = new float[nMels * frames];
+        for (int m = 0; m < nMels; m++) {
+            src.position(m * srcLen);
+            src.get(out, m * frames, frames);
+        }
+        return OnnxTensor.createTensor(env, FloatBuffer.wrap(out),
+                new long[]{1, nMels, frames});
     }
 
     /**

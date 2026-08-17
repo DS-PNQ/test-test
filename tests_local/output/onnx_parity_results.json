@@ -43,9 +43,9 @@
    "torch_transcript": "I would like to renew my citizen-nid card."
   },
   "vi": {
-   "onnx_wer": 0.375,
+   "onnx_wer": 0.625,
    "torch_wer": 0.375,
-   "transcript": "Tôi muốn ra hạng căn cứ công dân.",
+   "transcript": "Tui muốn ra hãng canh cứ công dân.",
    "torch_transcript": "Tôi muốn ra hãng căn cứ công dân."
   }
  }

@@ -324,6 +324,13 @@ def whisper_transcribe(whisper, wav_path: Path, lang: str) -> str:
         mel = pre.run(None, {"audio_pcm": samples.reshape(1, -1).astype(np.float32)})[0][0]
     else:
         mel = extract_mel(samples)
+    # Mirror ASRModule.sliceShortWindow: with a dynamic-length encoder
+    # (optimize/10 export) only the audio's real frames are fed.
+    enc_dim = enc.get_inputs()[0].shape[2]
+    dyn = not isinstance(enc_dim, int) or enc_dim < 0
+    frames = min(3000, max(8, len(samples) // 160))
+    if dyn and frames < 3000:
+        mel = mel[:, :frames]
     enc_out = enc.run(None, {"input_features": mel[None, :, :].astype(np.float32)})[0]
 
     inp_names = [i.name for i in dec.get_inputs()]
