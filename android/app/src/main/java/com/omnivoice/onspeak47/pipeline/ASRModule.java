@@ -44,8 +44,19 @@ public class ASRModule {
     private static final int N_FFT = 512;        
     private static final int WINDOW_SIZE = 400;  
     private static final int HOP_LENGTH = 160;
-    private static final int MAX_AUDIO_FRAMES = 3000; 
+    private static final int MAX_AUDIO_FRAMES = 3000;
     private static final int MAX_TOKENS = 448;
+
+    // Anti-hallucination: a greedy decoder that locks onto an n-gram never
+    // emits EOT, so it repeats the phrase until maxTokens (the "No fucking
+    // vapor." x12 bug). detectTailLoop() breaks the decode after
+    // MIN_LOOP_REPEATS consecutive repeats of any 1..MAX_LOOP_NGRAM token
+    // pattern and collapseTailLoop() keeps a single instance. Loops longer
+    // than MAX_LOOP_NGRAM tokens fall through to the post-decode
+    // compression-ratio check.
+    private static final int MAX_LOOP_NGRAM = 12;
+    private static final int MIN_LOOP_REPEATS = 3;
+    private static final double COMPRESSION_RATIO_LIMIT = 2.4;
 
     private final OrtEnvironment env;
     private OrtSession encoderSession;
@@ -227,6 +238,11 @@ public class ASRModule {
                     if (ownMel) melTensor.close();
                 }
                 text = normalizeTranscript(runDecoder(encoderResult, language, maxTokens));
+                if (isSuspectedHallucination(text)) {
+                    Log.w(TAG, "Compression ratio > " + COMPRESSION_RATIO_LIMIT
+                            + " — suspected repetition hallucination, discarding: " + text);
+                    text = "";
+                }
             } finally {
                 if (encoderResult != null) encoderResult.close();
                 if (preprocessResult != null) preprocessResult.close();
@@ -373,6 +389,69 @@ public class ASRModule {
         return out.trim();
     }
 
+    /**
+     * Longest n (1..MAX_LOOP_NGRAM) whose exact token pattern occupies the
+     * tail of {@code tokens} at least MIN_LOOP_REPEATS times in a row, or 0
+     * when the tail is not a loop. Longest-first matters: a phrase-level
+     * loop ("No fucking vapor." x3, n=5) must not be misread as its
+     * degenerate n=1 sub-pattern, so the collapse keeps the whole phrase.
+     * Called after every appended token, so O(n^2) per step over at most
+     * 12x2 comparisons — negligible next to a decoder step.
+     */
+    private static int detectTailLoop(ArrayList<Integer> tokens) {
+        int len = tokens.size();
+        for (int n = Math.min(MAX_LOOP_NGRAM, len / MIN_LOOP_REPEATS); n >= 1; n--) {
+            int base = len - n * MIN_LOOP_REPEATS;
+            boolean loop = true;
+            for (int r = 1; r < MIN_LOOP_REPEATS && loop; r++) {
+                for (int i = 0; i < n; i++) {
+                    if (!tokens.get(base + i).equals(tokens.get(base + r * n + i))) {
+                        loop = false;
+                        break;
+                    }
+                }
+            }
+            if (loop) return n;
+        }
+        return 0;
+    }
+
+    /**
+     * Trims a detected tail loop down to a single instance of its n-gram.
+     * The decode was already stopped by the caller's detectTailLoop() break;
+     * this only removes the redundant trailing copies before text assembly.
+     */
+    private static void collapseTailLoop(ArrayList<Integer> tokens) {
+        int n = detectTailLoop(tokens);
+        if (n > 0) {
+            int keep = tokens.size() - n * (MIN_LOOP_REPEATS - 1);
+            tokens.subList(keep, tokens.size()).clear();
+        }
+    }
+
+    /**
+     * OpenAI Whisper's compression-ratio heuristic: text dominated by a
+     * repeated pattern gzips far better than natural speech, so
+     * raw-bytes/gzipped-bytes above ~2.4 indicates a repetition
+     * hallucination. Catches loops LONGER than MAX_LOOP_NGRAM tokens, which
+     * the decode-time breaker cannot see. Short strings are skipped — the
+     * gzip header overhead dominates and would inflate the ratio.
+     */
+    private static boolean isSuspectedHallucination(String text) {
+        if (text == null || text.length() < 24) return false;
+        try {
+            byte[] raw = text.getBytes("UTF-8");
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            try (java.util.zip.GZIPOutputStream gz = new java.util.zip.GZIPOutputStream(bos)) {
+                gz.write(raw);
+            }
+            double compressed = bos.size();
+            return compressed > 0 && (raw.length / compressed) > COMPRESSION_RATIO_LIMIT;
+        } catch (java.io.IOException e) {
+            return false;  // gzip only fails on stream errors — never gate on this
+        }
+    }
+
     private String runDecoder(OrtSession.Result encoderResult, String language,
                               int maxTokens) throws OrtException {
         if (decoderSession == null || encoderResult == null) return "";
@@ -407,6 +486,7 @@ public class ASRModule {
             try {
                 decodeWithCache(encoderOutput, initialTokens, outputTokens,
                         hasCacheBranch, decoderPastNames, encoderPastNames, maxTokens);
+                collapseTailLoop(outputTokens);
                 return decodeTokens(outputTokens);
             } catch (Exception e) {
                 Log.e(TAG, "KV-cache decode failed — falling back to whole-sequence "
@@ -422,6 +502,7 @@ public class ASRModule {
         pastNames.addAll(encoderPastNames);
         decodeNoCache(encoderOutput, initialTokens, outputTokens,
                 hasCacheBranch, pastNames, maxTokens);
+        collapseTailLoop(outputTokens);
         return decodeTokens(outputTokens);
     }
 
@@ -489,6 +570,7 @@ public class ASRModule {
                 int next = argmaxLastRow((OnnxTensor) result.get(0));
                 if (next == EOT) break;               // done; EOT not appended
                 outputTokens.add(next);
+                if (detectTailLoop(outputTokens) > 0) break;  // repetition loop
                 if (outputTokens.size() >= maxTokens) break;
 
                 // ---- Next step: one token, empty encoder states, cycled pasts. ----
@@ -571,6 +653,7 @@ public class ASRModule {
                 int nextToken = argmaxLastRow((OnnxTensor) result.get(0));
                 if (nextToken == EOT) break;
                 outputTokens.add(nextToken);
+                if (detectTailLoop(outputTokens) > 0) break;  // repetition loop
                 long[] nextTokens = new long[currentTokens.length + 1];
                 System.arraycopy(currentTokens, 0, nextTokens, 0, currentTokens.length);
                 nextTokens[currentTokens.length] = nextToken;

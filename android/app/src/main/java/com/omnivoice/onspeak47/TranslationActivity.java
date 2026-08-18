@@ -47,6 +47,13 @@ public class TranslationActivity extends AppCompatActivity {
     private static final String TAG = "TranslationActivity";
     private static final int PERMISSION_REQUEST_AUDIO = 100;
 
+    // Silence gate: an RMS below ~-46 dBFS means the press caught no speech
+    // (pocket, table, button fumble). Whisper hallucinates fluent text on
+    // such input, so skip the whole pipeline instead of feeding it. Quiet
+    // but real speech sits well above this; the measured RMS is logged for
+    // per-device tuning.
+    private static final double SILENCE_RMS_THRESHOLD = 0.005;
+
     // UI elements
     private Button talkButton;
     private TextView transcriptView;
@@ -196,6 +203,17 @@ public class TranslationActivity extends AppCompatActivity {
             return;
         }
 
+        // Energy gate — see SILENCE_RMS_THRESHOLD.
+        double rms = computePcmRms(audioPath);
+        Log.i(TAG, "Recorded audio RMS: "
+                + String.format(java.util.Locale.US, "%.4f", rms));
+        if (rms >= 0 && rms < SILENCE_RMS_THRESHOLD) {
+            transcriptView.setText(R.string.no_speech);
+            translationView.setText("");
+            timingView.setText("");
+            return;
+        }
+
         // Run pipeline on the single-thread executor (latest-wins cancel)
         final int generation = requestGeneration.incrementAndGet();
         pipelineExecutor.execute(() -> {
@@ -211,7 +229,9 @@ public class TranslationActivity extends AppCompatActivity {
                 }
 
                 runOnUiThread(() -> {
-                    transcriptView.setText(result.transcript);
+                    transcriptView.setText(result.transcript.isEmpty()
+                            ? getText(R.string.no_speech)
+                            : result.transcript);
                     translationView.setText(result.translation);
                     timingView.setText(String.format(
                             "ASR: %dms | Translation: %dms | TTS: %dms | Total: %dms",
@@ -236,6 +256,38 @@ public class TranslationActivity extends AppCompatActivity {
                 runOnUiThread(() -> transcriptView.setText("Error: " + e.getMessage()));
             }
         });
+    }
+
+    // ----------------------------------------------------------------
+    // Silence gate
+    // ----------------------------------------------------------------
+
+    /**
+     * RMS of the recorded 16-bit little-endian mono PCM, normalized to
+     * 0..1 — or -1 when the file cannot be read, so the gate is skipped
+     * rather than misfiring on real audio. The header is the 44 bytes
+     * AudioRecorder writes before the data chunk.
+     */
+    private static double computePcmRms(String wavPath) {
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(wavPath)) {
+            byte[] header = new byte[44];
+            if (fis.read(header) < 44) return -1;
+            byte[] buf = new byte[4096];
+            long sumSq = 0;
+            long count = 0;
+            int read;
+            while ((read = fis.read(buf)) > 0) {
+                for (int i = 1; i < read; i += 2) {
+                    short s = (short) (((buf[i] & 0xFF) << 8) | (buf[i - 1] & 0xFF));
+                    sumSq += (long) s * s;
+                    count++;
+                }
+            }
+            return count == 0 ? 0.0 : Math.sqrt((double) sumSq / count) / 32768.0;
+        } catch (java.io.IOException e) {
+            Log.w(TAG, "RMS read failed: " + e.getMessage());
+            return -1;
+        }
     }
 
     // ----------------------------------------------------------------

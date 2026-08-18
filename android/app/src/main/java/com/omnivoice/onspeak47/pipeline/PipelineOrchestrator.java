@@ -55,6 +55,16 @@ public class PipelineOrchestrator {
 
         if (cancelled.getAsBoolean()) return null;
 
+        // Empty transcript = silence/noise gated before or during ASR
+        // (energy gate or discarded hallucination). Translating and
+        // synthesizing an empty string costs seconds and produces junk,
+        // so stop here and let the UI show "no speech".
+        if (asrResult.text == null || asrResult.text.trim().isEmpty()) {
+            Log.i(TAG, "Empty transcript — skipping Translation and TTS");
+            long totalMs = System.currentTimeMillis() - totalStart;
+            return new PipelineResult("", "", null, asrMs, 0, 0, totalMs, null);
+        }
+
         // --- Stage 2: Translation (Text → Translated Text) ---
         t0 = System.currentTimeMillis();
         TranslationModule.TranslationResult translationResult =

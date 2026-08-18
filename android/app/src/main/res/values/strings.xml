@@ -12,6 +12,7 @@
     <string name="hint_speak">Press and hold the button to speak…</string>
     <string name="btn_talk">🎤  Hold to Speak</string>
     <string name="btn_recording">🔴  Recording…</string>
+    <string name="no_speech">No speech detected</string>
 
     <!-- Languages -->
     <string name="lang_vi">Tiếng Việt</string>
