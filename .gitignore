@@ -36,3 +36,6 @@ android/.idea/
 .venv-ort122/
 .zcode/
 .pytest_cache/
+
+# Docs (internal/working notes — excluded from submission branches)
+docs/
